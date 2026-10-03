@@ -73,8 +73,17 @@ namespace CalmDown
             }
 
             // Enforce single instance: if already running, restore existing window and exit
-            bool isFirstInstance;
-            singleInstanceMutex = new Mutex(true, "CalmDown_SingleInstance_Mutex_Session", out isFirstInstance);
+            bool isFirstInstance = false;
+            try
+            {
+                singleInstanceMutex = new Mutex(false, @"Local\CalmDown_SingleInstance_Mutex_v2");
+                isFirstInstance = singleInstanceMutex.WaitOne(0, false);
+            }
+            catch (AbandonedMutexException)
+            {
+                isFirstInstance = true;
+            }
+
             if (!isFirstInstance)
             {
                 PostMessage((IntPtr)HWND_BROADCAST, WM_SHOWCALMDOWN, IntPtr.Zero, IntPtr.Zero);
