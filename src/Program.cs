@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Media;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace CalmDown
@@ -55,6 +56,61 @@ namespace CalmDown
         }
     }
 
+    internal static class CpuMonitor
+    {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetSystemTimes(out System.Runtime.InteropServices.ComTypes.FILETIME idleTime,
+                                                  out System.Runtime.InteropServices.ComTypes.FILETIME kernelTime,
+                                                  out System.Runtime.InteropServices.ComTypes.FILETIME userTime);
+
+        private static ulong prevIdle = 0;
+        private static ulong prevKernel = 0;
+        private static ulong prevUser = 0;
+        private static bool initialized = false;
+
+        private static ulong ToUInt64(System.Runtime.InteropServices.ComTypes.FILETIME ft)
+        {
+            return ((ulong)(uint)ft.dwHighDateTime << 32) | (uint)ft.dwLowDateTime;
+        }
+
+        public static int GetCurrentLoad()
+        {
+            System.Runtime.InteropServices.ComTypes.FILETIME idle, kernel, user;
+            if (!GetSystemTimes(out idle, out kernel, out user)) return -1;
+
+            ulong curIdle = ToUInt64(idle);
+            ulong curKernel = ToUInt64(kernel);
+            ulong curUser = ToUInt64(user);
+
+            if (!initialized)
+            {
+                prevIdle = curIdle;
+                prevKernel = curKernel;
+                prevUser = curUser;
+                initialized = true;
+                return 0;
+            }
+
+            ulong diffIdle = curIdle - prevIdle;
+            ulong diffKernel = curKernel - prevKernel;
+            ulong diffUser = curUser - prevUser;
+
+            prevIdle = curIdle;
+            prevKernel = curKernel;
+            prevUser = curUser;
+
+            ulong sysTotal = diffKernel + diffUser;
+            if (sysTotal == 0) return 0;
+
+            if (diffIdle > sysTotal) diffIdle = sysTotal;
+            ulong busy = sysTotal - diffIdle;
+            int pct = (int)((busy * 100) / sysTotal);
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+            return pct;
+        }
+    }
+
     internal static class PowerHelper
     {
         public const int FREQ_UNCAPPED = 0;
@@ -62,6 +118,9 @@ namespace CalmDown
         private static readonly string BackupPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "CalmDown", "original_settings.txt");
+
+        private static int currentAppliedFreq = -999;
+        private static int currentAppliedBoost = -999;
 
         public static bool RunPowercfg(string args, out string output)
         {
@@ -135,9 +194,11 @@ namespace CalmDown
 
                 int boost = int.Parse(parts[0]);
                 int freq = int.Parse(parts[1]);
-                if (boost < 0) boost = 2; // fallback to aggressive
-                if (freq < 0) freq = 0;   // fallback to uncapped
+                if (boost < 0) boost = 2;
+                if (freq < 0) freq = 0;
 
+                currentAppliedFreq = -999;
+                currentAppliedBoost = -999;
                 return ApplyMode(freq, (PerfBoostMode)boost, false);
             }
             catch { return false; }
@@ -145,6 +206,11 @@ namespace CalmDown
 
         public static bool ApplyMode(int freqMhz, PerfBoostMode boostMode, bool silent)
         {
+            if (currentAppliedFreq == freqMhz && currentAppliedBoost == (int)boostMode)
+            {
+                return true;
+            }
+
             EnsureBackup();
             string dummy;
             bool ok = true;
@@ -159,6 +225,8 @@ namespace CalmDown
             if (ok)
             {
                 RunPowercfg("/setactive SCHEME_CURRENT", out dummy);
+                currentAppliedFreq = freqMhz;
+                currentAppliedBoost = (int)boostMode;
             }
             return ok;
         }
@@ -175,34 +243,44 @@ namespace CalmDown
         private Button btnSweet;
         private Button btnBeast;
 
+        private CheckBox chkDynamicGovernor;
+        private Label lblDynamicDesc;
         private CheckBox chkAutoPilot;
         private Label lblAutoPilotDesc;
+
         private Button btnRestore;
         private Button btnMinimizeTray;
 
         private NotifyIcon trayIcon;
         private ContextMenuStrip trayMenu;
-        private Timer autoPilotTimer;
+        private ToolStripMenuItem trayDynamicItem;
+        private ToolStripMenuItem trayAutoPilotItem;
+        private Timer backgroundTimer;
 
-        // Auto-pilot watched games / processes
+        // Auto-pilot watched games
         private static readonly string[] WatchedProcesses = new[]
         {
             "VALORANT", "VALORANT-Win64-Shipping", "cs2", "GTA5", "Overwatch", "FortniteClient-Win64-Shipping", "r5apex"
         };
         private bool isGameActive = false;
 
+        // Governor debounce counters
+        private int lowLoadCount = 0;
+        private int midLoadCount = 0;
+        private int heavyLoadCount = 0;
+
         public MainForm()
         {
             InitializeComponent();
             SetupTray();
-            SetupAutoPilot();
-            RefreshStatus();
+            SetupGovernorTimer();
+            RefreshStatus(0);
         }
 
         private void InitializeComponent()
         {
             this.Text = "CalmDown v2.0 - Thermal Governor";
-            this.Size = new Size(520, 560);
+            this.Size = new Size(520, 630);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -258,7 +336,9 @@ namespace CalmDown
                 new Point(25, 110),
                 Color.FromArgb(21, 35, 54),
                 Color.FromArgb(41, 121, 255),
-                () => SetMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled, "ICE-COLD MODE ACTIVATED")
+                () => {
+                    SetMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled);
+                }
             );
 
             btnSweet = CreateStyledCard(
@@ -267,7 +347,9 @@ namespace CalmDown
                 new Point(25, 195),
                 Color.FromArgb(20, 42, 32),
                 Color.FromArgb(0, 200, 83),
-                () => SetMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, "SWEET-SPOT BALANCED ACTIVATED")
+                () => {
+                    SetMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
+                }
             );
 
             btnBeast = CreateStyledCard(
@@ -276,50 +358,92 @@ namespace CalmDown
                 new Point(25, 280),
                 Color.FromArgb(46, 26, 28),
                 Color.FromArgb(255, 82, 82),
-                () => SetMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive, "BEAST TURBO ACTIVATED")
+                () => {
+                    SetMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive);
+                }
             );
 
             this.Controls.Add(btnCold);
             this.Controls.Add(btnSweet);
             this.Controls.Add(btnBeast);
 
-            // Auto-Pilot Group
+            // Automation Settings Panel
             var pnlAuto = new Panel
             {
-                Location = new Point(25, 375),
-                Size = new Size(455, 60),
+                Location = new Point(25, 370),
+                Size = new Size(455, 140),
                 BackColor = Color.FromArgb(32, 35, 45)
             };
 
+            // 1. Dynamic Governor Toggle
+            chkDynamicGovernor = new CheckBox
+            {
+                Text = "⚡  Smart Dynamic Governor (Auto-tune by CPU Load)",
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(230, 235, 245),
+                Location = new Point(14, 12),
+                AutoSize = true,
+                Checked = false, // User chooses ON or OFF
+                Cursor = Cursors.Hand
+            };
+            chkDynamicGovernor.CheckedChanged += (s, e) =>
+            {
+                if (trayDynamicItem != null) trayDynamicItem.Checked = chkDynamicGovernor.Checked;
+                if (!chkDynamicGovernor.Checked)
+                {
+                    trayIcon.ShowBalloonTip(1200, "Dynamic Governor", "Disabled. CalmDown will hold your chosen preset.", ToolTipIcon.Info);
+                }
+                else
+                {
+                    trayIcon.ShowBalloonTip(1200, "Dynamic Governor", "Enabled! CalmDown will auto-adjust clocks by CPU load.", ToolTipIcon.Info);
+                }
+            };
+
+            lblDynamicDesc = new Label
+            {
+                Text = "< 20% Load -> Ice-Cold  |  25-80% -> Sweet-Spot  |  > 85% -> Beast Turbo",
+                Font = new Font("Segoe UI", 8, FontStyle.Regular),
+                ForeColor = Color.FromArgb(160, 165, 180),
+                Location = new Point(34, 34),
+                AutoSize = true
+            };
+
+            // 2. Game Auto-Pilot Toggle
             chkAutoPilot = new CheckBox
             {
-                Text = "🎮  Enable Auto-Pilot Game Detection",
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Text = "🎮  Game Auto-Pilot (Priority Sweet-Spot for Games)",
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(230, 235, 245),
-                Location = new Point(15, 10),
+                Location = new Point(14, 72),
                 AutoSize = true,
                 Checked = true,
                 Cursor = Cursors.Hand
             };
+            chkAutoPilot.CheckedChanged += (s, e) =>
+            {
+                if (trayAutoPilotItem != null) trayAutoPilotItem.Checked = chkAutoPilot.Checked;
+            };
 
             lblAutoPilotDesc = new Label
             {
-                Text = "Auto-switches to Sweet-Spot when Valorant/CS2 starts, and back to Ice-Cold on exit.",
+                Text = "Locks 3.5 GHz when Valorant, CS2, GTA 5, or Apex starts for stutter-free FPS.",
                 Font = new Font("Segoe UI", 8, FontStyle.Regular),
                 ForeColor = Color.FromArgb(160, 165, 180),
-                Location = new Point(17, 34),
+                Location = new Point(34, 94),
                 AutoSize = true
             };
 
+            pnlAuto.Controls.Add(chkDynamicGovernor);
+            pnlAuto.Controls.Add(lblDynamicDesc);
             pnlAuto.Controls.Add(chkAutoPilot);
             pnlAuto.Controls.Add(lblAutoPilotDesc);
             this.Controls.Add(pnlAuto);
 
-            // Bottom Actions
+            // Bottom Action Buttons
             btnRestore = new Button
             {
                 Text = "🛡️ Reset to Stock",
-                Location = new Point(25, 455),
+                Location = new Point(25, 530),
                 Size = new Size(160, 36),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
@@ -330,10 +454,11 @@ namespace CalmDown
             btnRestore.FlatAppearance.BorderSize = 0;
             btnRestore.Click += (s, e) =>
             {
+                chkDynamicGovernor.Checked = false;
                 if (PowerHelper.RestoreOriginal())
                 {
-                    MessageBox.Show("Original system settings successfully restored!", "CalmDown", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    RefreshStatus();
+                    MessageBox.Show("Original stock power settings successfully restored!", "CalmDown", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    RefreshStatus(CpuMonitor.GetCurrentLoad());
                 }
             };
             this.Controls.Add(btnRestore);
@@ -341,7 +466,7 @@ namespace CalmDown
             btnMinimizeTray = new Button
             {
                 Text = "📌 Minimize to Tray",
-                Location = new Point(320, 455),
+                Location = new Point(320, 530),
                 Size = new Size(160, 36),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
@@ -353,18 +478,18 @@ namespace CalmDown
             btnMinimizeTray.Click += (s, e) =>
             {
                 this.Hide();
-                trayIcon.ShowBalloonTip(1500, "CalmDown Active", "Minimized to tray. Auto-Pilot is actively monitoring your games.", ToolTipIcon.Info);
+                trayIcon.ShowBalloonTip(1500, "CalmDown Active", "Minimized to tray. Monitoring in the background.", ToolTipIcon.Info);
             };
             this.Controls.Add(btnMinimizeTray);
 
-            // Handle Form Closing -> Minimize to tray instead of full exit
+            // Minimize on Form Close
             this.FormClosing += (s, e) =>
             {
                 if (e.CloseReason == CloseReason.UserClosing)
                 {
                     e.Cancel = true;
                     this.Hide();
-                    trayIcon.ShowBalloonTip(1200, "CalmDown", "Running quietly in the background. Right-click tray icon to manage or exit.", ToolTipIcon.Info);
+                    trayIcon.ShowBalloonTip(1200, "CalmDown", "Running quietly in system tray. Double-click icon to reopen.", ToolTipIcon.Info);
                 }
             };
         }
@@ -410,7 +535,6 @@ namespace CalmDown
             btn.Controls.Add(lblD);
             btn.Click += (s, e) => onClick();
 
-            // Hover effects
             btn.MouseEnter += (s, e) => btn.FlatAppearance.BorderColor = accent;
             btn.MouseLeave += (s, e) => btn.FlatAppearance.BorderColor = Color.FromArgb(60, accent.R, accent.G, accent.B);
 
@@ -420,14 +544,28 @@ namespace CalmDown
         private void SetupTray()
         {
             trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("CalmDown v2.0", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
+            trayMenu.Items.Add("🧘 CalmDown v2.0", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
             trayMenu.Items.Add("-");
-            trayMenu.Items.Add("❄️ Ice-Cold Mode", null, (s, e) => SetMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled, "Ice-Cold Activated"));
-            trayMenu.Items.Add("⚖️ Sweet-Spot Mode", null, (s, e) => SetMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, "Sweet-Spot Activated"));
-            trayMenu.Items.Add("🔥 Beast Turbo Mode", null, (s, e) => SetMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive, "Beast Turbo Activated"));
+            trayMenu.Items.Add("❄️ Ice-Cold Mode", null, (s, e) => SetMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled));
+            trayMenu.Items.Add("⚖️ Sweet-Spot Mode", null, (s, e) => SetMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive));
+            trayMenu.Items.Add("🔥 Beast Turbo Mode", null, (s, e) => SetMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive));
+            trayMenu.Items.Add("-");
+
+            trayDynamicItem = new ToolStripMenuItem("⚡ Smart Dynamic Governor", null, (s, e) =>
+            {
+                chkDynamicGovernor.Checked = !chkDynamicGovernor.Checked;
+            }) { CheckOnClick = false, Checked = chkDynamicGovernor.Checked };
+            trayMenu.Items.Add(trayDynamicItem);
+
+            trayAutoPilotItem = new ToolStripMenuItem("🎮 Game Auto-Pilot", null, (s, e) =>
+            {
+                chkAutoPilot.Checked = !chkAutoPilot.Checked;
+            }) { CheckOnClick = false, Checked = chkAutoPilot.Checked };
+            trayMenu.Items.Add(trayAutoPilotItem);
+
             trayMenu.Items.Add("-");
             trayMenu.Items.Add("Open CalmDown", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
-            trayMenu.Items.Add("Exit", null, (s, e) => { trayIcon.Visible = false; Application.Exit(); });
+            trayMenu.Items.Add("Exit CalmDown", null, (s, e) => { trayIcon.Visible = false; Application.Exit(); });
 
             trayIcon = new NotifyIcon
             {
@@ -439,53 +577,97 @@ namespace CalmDown
             trayIcon.DoubleClick += (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; };
         }
 
-        private void SetupAutoPilot()
+        private void SetupGovernorTimer()
         {
-            autoPilotTimer = new Timer { Interval = 3500 };
-            autoPilotTimer.Tick += (s, e) =>
+            backgroundTimer = new Timer { Interval = 2500 };
+            backgroundTimer.Tick += (s, e) =>
             {
-                if (!chkAutoPilot.Checked) return;
+                int currentLoad = CpuMonitor.GetCurrentLoad();
+                if (currentLoad < 0) currentLoad = 0;
 
+                // 1. Check for Active Games
                 bool gameRunning = false;
-                foreach (string procName in WatchedProcesses)
+                if (chkAutoPilot.Checked)
                 {
-                    if (Process.GetProcessesByName(procName).Length > 0)
+                    foreach (string procName in WatchedProcesses)
                     {
-                        gameRunning = true;
-                        break;
+                        if (Process.GetProcessesByName(procName).Length > 0)
+                        {
+                            gameRunning = true;
+                            break;
+                        }
+                    }
+
+                    if (gameRunning && !isGameActive)
+                    {
+                        isGameActive = true;
+                        PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true);
+                        trayIcon.ShowBalloonTip(1800, "🎮 Game Detected", "CalmDown locked Sweet-Spot Mode (3.5 GHz) for smooth FPS.", ToolTipIcon.Info);
+                    }
+                    else if (!gameRunning && isGameActive)
+                    {
+                        isGameActive = false;
+                        PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled, true);
+                        trayIcon.ShowBalloonTip(1800, "❄️ Game Closed", "CalmDown returned to Ice-Cold Mode. Cooling down.", ToolTipIcon.Info);
                     }
                 }
 
-                // Transition: Game launched
-                if (gameRunning && !isGameActive)
+                // 2. Dynamic Governor (CPU load based) - only active if game is NOT overriding
+                if (chkDynamicGovernor.Checked && !gameRunning)
                 {
-                    isGameActive = true;
-                    PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true);
-                    trayIcon.ShowBalloonTip(1800, "🎮 Game Detected", "CalmDown automatically switched to Sweet-Spot Mode (3.5 GHz).", ToolTipIcon.Info);
-                    RefreshStatus();
+                    if (currentLoad >= 85)
+                    {
+                        heavyLoadCount++;
+                        midLoadCount = 0;
+                        lowLoadCount = 0;
+                        if (heavyLoadCount >= 2) // Sustained heavy load (5s)
+                        {
+                            PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive, true);
+                        }
+                    }
+                    else if (currentLoad >= 25 && currentLoad < 85)
+                    {
+                        midLoadCount++;
+                        heavyLoadCount = 0;
+                        lowLoadCount = 0;
+                        if (midLoadCount >= 2) // Sustained medium load (5s)
+                        {
+                            PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true);
+                        }
+                    }
+                    else // < 20%
+                    {
+                        lowLoadCount++;
+                        heavyLoadCount = 0;
+                        midLoadCount = 0;
+                        if (lowLoadCount >= 2) // Sustained low load (5s)
+                        {
+                            PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled, true);
+                        }
+                    }
                 }
-                // Transition: Game closed
-                else if (!gameRunning && isGameActive)
-                {
-                    isGameActive = false;
-                    PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled, true);
-                    trayIcon.ShowBalloonTip(1800, "❄️ Game Closed", "CalmDown restored Ice-Cold Mode. Cooling down CPU.", ToolTipIcon.Info);
-                    RefreshStatus();
-                }
+
+                RefreshStatus(currentLoad);
             };
-            autoPilotTimer.Start();
+            backgroundTimer.Start();
         }
 
-        private void SetMode(int freq, PerfBoostMode boost, string banner)
+        private void SetMode(int freq, PerfBoostMode boost)
         {
+            // If user manually clicks, disable dynamic governor so manual selection holds
+            if (chkDynamicGovernor.Checked)
+            {
+                chkDynamicGovernor.Checked = false;
+            }
+
             if (PowerHelper.ApplyMode(freq, boost, false))
             {
                 SystemSounds.Asterisk.Play();
-                RefreshStatus();
+                RefreshStatus(CpuMonitor.GetCurrentLoad());
             }
         }
 
-        private void RefreshStatus()
+        private void RefreshStatus(int currentLoad)
         {
             string boostOut, freqOut;
             if (!PowerHelper.RunPowercfg("/qh SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE", out boostOut) ||
@@ -499,30 +681,37 @@ namespace CalmDown
             int b = PowerHelper.ParseCurrentIndex(boostOut);
             int f = PowerHelper.ParseCurrentIndex(freqOut);
 
+            string modeName;
+            Color modeColor;
+
             if (b == (int)PerfBoostMode.Disabled)
             {
-                lblActiveBadge.Text = "ACTIVE: ❄️ ICE-COLD (2.4 GHz | Zero Boost)";
-                lblActiveBadge.ForeColor = Color.FromArgb(41, 121, 255);
-                trayIcon.Text = "CalmDown: Ice-Cold Mode";
+                modeName = "❄️ ICE-COLD (2.4 GHz | Zero Boost)";
+                modeColor = Color.FromArgb(41, 121, 255);
             }
             else if (f == PowerHelper.FREQ_SWEETSPOT_MHZ)
             {
-                lblActiveBadge.Text = "ACTIVE: ⚖️ SWEET-SPOT (3.5 GHz Capped)";
-                lblActiveBadge.ForeColor = Color.FromArgb(0, 200, 83);
-                trayIcon.Text = "CalmDown: Sweet-Spot Mode";
+                modeName = "⚖️ SWEET-SPOT (3.5 GHz Capped)";
+                modeColor = Color.FromArgb(0, 200, 83);
             }
             else if (b == (int)PerfBoostMode.Aggressive && f == PowerHelper.FREQ_UNCAPPED)
             {
-                lblActiveBadge.Text = "ACTIVE: 🔥 BEAST TURBO (Uncapped 4.9 GHz)";
-                lblActiveBadge.ForeColor = Color.FromArgb(255, 82, 82);
-                trayIcon.Text = "CalmDown: Beast Turbo Mode";
+                modeName = "🔥 BEAST TURBO (Uncapped 4.9 GHz)";
+                modeColor = Color.FromArgb(255, 82, 82);
             }
             else
             {
-                lblActiveBadge.Text = string.Format("ACTIVE: CUSTOM (Boost={0}, Max={1}MHz)", b, f);
-                lblActiveBadge.ForeColor = Color.FromArgb(255, 193, 7);
-                trayIcon.Text = "CalmDown: Custom Mode";
+                modeName = string.Format("CUSTOM (Boost={0}, Max={1}MHz)", b, f);
+                modeColor = Color.FromArgb(255, 193, 7);
             }
+
+            string autoTag = "";
+            if (chkDynamicGovernor != null && chkDynamicGovernor.Checked) autoTag = " [DYNAMIC]";
+            else if (isGameActive) autoTag = " [GAME PRIORITY]";
+
+            lblActiveBadge.Text = string.Format("ACTIVE: {0}{1}  |  CPU: {2}%", modeName, autoTag, currentLoad);
+            lblActiveBadge.ForeColor = modeColor;
+            trayIcon.Text = string.Format("CalmDown: {0} ({1}%)", modeName.Length > 20 ? modeName.Substring(0, 18) + ".." : modeName, currentLoad);
         }
     }
 }

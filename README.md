@@ -13,11 +13,12 @@
 
 ## 🚀 What's New in v2.0
 
-- 🎨 **Modern Dark Slate GUI:** Clean, responsive card-based interface with active mode badges and hover feedback.
-- 🎮 **Auto-Pilot Game Detection:** Automatically engages **Sweet-Spot Mode (3.5 GHz)** when games (`VALORANT`, `cs2`, `GTA5`, `r5apex`, `FortniteClient`, `Overwatch`) launch, and seamlessly reverts to **Ice-Cold Mode (~2.4 GHz)** when they close.
-- 📌 **System Tray Integration:** Minimizes cleanly to the taskbar notification area with right-click quick presets and balloon notifications.
-- ⚡ **CLI Automation Flags:** Scriptable via command line (`CalmDown.exe --ice`, `--sweet`, `--beast`, `--restore`) for game launchers or Task Scheduler.
-- 🛡️ **Safe Backup & 1-Click Restore:** Automatically backs up stock Windows power scheme indexes on first run and provides a dedicated "Reset to Stock" button.
+- 🎨 **Modern Dark Slate GUI:** Clean, responsive card-based interface with live CPU Load % indicators and hover feedback.
+- ⚡ **Smart Dynamic Load Governor:** Real-time load monitor with hysteresis. Auto-tunes clock ceilings based on CPU load (<20% Ice-Cold | 25-80% Sweet-Spot | >85% Beast Turbo). Completely user-toggleable (ON/OFF).
+- 🎮 **Game Auto-Pilot:** Automatically locks **Sweet-Spot Mode (3.5 GHz)** when games (`VALORANT`, `cs2`, `GTA5`, `r5apex`, `FortniteClient`, `Overwatch`) launch to eliminate frametime stutter, and seamlessly reverts to **Ice-Cold Mode (~2.4 GHz)** on exit.
+- 📌 **System Tray Integration:** Minimizes cleanly to the taskbar notification area with right-click quick toggles for modes, dynamic governor, and balloon alerts.
+- ⚡ **CLI Automation Flags:** Scriptable via command line (`CalmDown.exe --ice`, `--sweet`, `--beast`, `--restore`).
+- 🛡️ **Safe Backup & 1-Click Restore:** Backs up stock Windows power scheme indexes on first run and provides a dedicated "Reset to Stock" button.
 
 ---
 
@@ -120,7 +121,7 @@ To verify the integrity of the standalone binary:
 
 - **File:** `CalmDown.exe`
 - **SHA-256 Checksum:**  
-  `E0A49D0CAFC724AD481E940F9217E78FB09BAC2C3D14BFAA4642A79D8B3AA994`
+  `E55B5904778959021A76F556C19DFFA1F96D105F2FBCBCDA4D6A0AF75803F113`
 
 You can verify the checksum in PowerShell:
 ```powershell
