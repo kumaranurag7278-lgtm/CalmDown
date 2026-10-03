@@ -106,4 +106,4 @@ Simply double-click **`Uninstall.bat`**. It instantly restores stock Windows pow
 
 Released under the [MIT License](LICENSE). Free for personal and commercial use.
 
-**Created with ❤️ by [Anurag Kumar](https://github.com/anurag-kumar)**
+**Created with ❤️ by [Anurag Kumar](https://github.com/kumaranurag7278-lgtm)**
