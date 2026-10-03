@@ -11,10 +11,10 @@ echo.
 set "TARGET_DIR=%LOCALAPPDATA%\CalmDown"
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
-echo [1/3] Copying application files to %TARGET_DIR%...
-copy /Y "%~dp0src\Power_Mode_Selector.ps1" "%TARGET_DIR%\Power_Mode_Selector.ps1" >nul
+echo [1/3] Copying CalmDown.exe to %TARGET_DIR%...
+copy /Y "%~dp0bin\CalmDown.exe" "%TARGET_DIR%\CalmDown.exe" >nul
 if errorlevel 1 (
-    echo [ERROR] Failed to copy files. Please ensure you extract the ZIP before running.
+    echo [ERROR] Failed to copy CalmDown.exe. Please ensure you extract the ZIP before running.
     pause
     exit /b 1
 )
@@ -24,10 +24,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
     "$WshShell = New-Object -ComObject WScript.Shell; " ^
     "$desktop = [Environment]::GetFolderPath('Desktop'); " ^
     "$shortcut = $WshShell.CreateShortcut((Join-Path $desktop 'CalmDown.lnk')); " ^
-    "$shortcut.TargetPath = 'powershell.exe'; " ^
-    "$shortcut.Arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""%TARGET_DIR%\Power_Mode_Selector.ps1""'; " ^
+    "$shortcut.TargetPath = '%TARGET_DIR%\CalmDown.exe'; " ^
     "$shortcut.WorkingDirectory = '%TARGET_DIR%'; " ^
-    "$shortcut.Description = 'CalmDown: Thermal & Performance Switcher (Ice-Cold, Sweet-Spot, Beast)'; " ^
+    "$shortcut.Description = 'CalmDown: 1-Click Thermal & Performance Switcher'; " ^
     "$shortcut.IconLocation = 'shell32.dll, 221'; " ^
     "$shortcut.Hotkey = 'Ctrl+Alt+C'; " ^
     "$shortcut.Save();"
@@ -46,8 +45,9 @@ echo ========================================================
 echo.
 echo  * Desktop shortcut created: 'CalmDown'
 echo  * Shortcut hotkey assigned: Ctrl + Alt + C
+echo  * Executable path: %TARGET_DIR%\CalmDown.exe
 echo.
 echo Press any key to launch CalmDown now...
 pause >nul
-start "" powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TARGET_DIR%\Power_Mode_Selector.ps1"
+start "" "%TARGET_DIR%\CalmDown.exe"
 exit /b 0
