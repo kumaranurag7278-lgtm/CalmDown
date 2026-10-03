@@ -1,14 +1,14 @@
 @echo off
 setlocal enabledelayedexpansion
-title CoolBoost Control - Installer
+title CalmDown - Setup
 
 echo ========================================================
-echo   CoolBoost Control - Setup
+echo   CalmDown - Setup
 echo   Thermal & Performance Switcher for Windows Laptops
 echo ========================================================
 echo.
 
-set "TARGET_DIR=%LOCALAPPDATA%\CoolBoostControl"
+set "TARGET_DIR=%LOCALAPPDATA%\CalmDown"
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
 echo [1/3] Copying application files to %TARGET_DIR%...
@@ -23,11 +23,11 @@ echo [2/3] Creating Desktop Shortcut with Hotkey (Ctrl+Alt+C)...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
     "$WshShell = New-Object -ComObject WScript.Shell; " ^
     "$desktop = [Environment]::GetFolderPath('Desktop'); " ^
-    "$shortcut = $WshShell.CreateShortcut((Join-Path $desktop 'CoolBoost Control.lnk')); " ^
+    "$shortcut = $WshShell.CreateShortcut((Join-Path $desktop 'CalmDown.lnk')); " ^
     "$shortcut.TargetPath = 'powershell.exe'; " ^
     "$shortcut.Arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""%TARGET_DIR%\Power_Mode_Selector.ps1""'; " ^
     "$shortcut.WorkingDirectory = '%TARGET_DIR%'; " ^
-    "$shortcut.Description = 'Thermal & Performance Mode Switcher (Ice-Cold, Sweet-Spot, Beast)'; " ^
+    "$shortcut.Description = 'CalmDown: Thermal & Performance Switcher (Ice-Cold, Sweet-Spot, Beast)'; " ^
     "$shortcut.IconLocation = 'shell32.dll, 221'; " ^
     "$shortcut.Hotkey = 'Ctrl+Alt+C'; " ^
     "$shortcut.Save();"
@@ -41,13 +41,13 @@ powercfg /setactive SCHEME_CURRENT >nul 2>&1
 
 echo.
 echo ========================================================
-echo   SUCCESS! CoolBoost Control is installed.
+echo   SUCCESS! CalmDown is installed.
 echo ========================================================
 echo.
-echo  * Desktop shortcut created: 'CoolBoost Control'
+echo  * Desktop shortcut created: 'CalmDown'
 echo  * Shortcut hotkey assigned: Ctrl + Alt + C
 echo.
-echo Press any key to launch CoolBoost Control now...
+echo Press any key to launch CalmDown now...
 pause >nul
 start "" powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TARGET_DIR%\Power_Mode_Selector.ps1"
 exit /b 0

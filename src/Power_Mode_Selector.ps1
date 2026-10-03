@@ -1,4 +1,4 @@
-# CoolBoost Control - Thermal & Power Mode Switcher for Windows Laptops
+# CalmDown - Thermal & Power Mode Switcher for Windows Laptops
 # Copyright (c) 2026 Anurag Kumar. Released under the MIT License.
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -30,7 +30,7 @@ function Set-IceCold {
     powercfg /setdcvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 0
     powercfg /setactive SCHEME_CURRENT
     [System.Media.SystemSounds]::Asterisk.Play()
-    [System.Windows.Forms.MessageBox]::Show("ICE-COLD MODE ACTIVATED!`n`n- CPU Clock: Base Frequency (~2.4 GHz)`n- Thermals: ~60C - 65C`n- Fans: Silent & Keyboard stays cool`n- Best for: Study, Browsing, Daily Work, Battery Saving", "CoolBoost Control", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    [System.Windows.Forms.MessageBox]::Show("ICE-COLD MODE ACTIVATED!`n`n- CPU Clock: Base Frequency (~2.4 GHz)`n- Thermals: ~60C - 65C`n- Fans: Silent & Keyboard stays cool`n- Best for: Study, Browsing, Daily Work, Battery Saving", "CalmDown", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     $form.Close()
 }
 
@@ -41,7 +41,7 @@ function Set-SweetSpot {
     powercfg /setdcvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 4
     powercfg /setactive SCHEME_CURRENT
     [System.Media.SystemSounds]::Asterisk.Play()
-    [System.Windows.Forms.MessageBox]::Show("SWEET-SPOT BALANCED MODE ACTIVATED!`n`n- CPU Clock: Capped at 3.5 GHz (Sweet Spot)`n- Thermals: ~72C - 78C`n- High FPS without 95C overheating!`n- Best for: Valorant, Competitive Gaming, Multitasking", "CoolBoost Control", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    [System.Windows.Forms.MessageBox]::Show("SWEET-SPOT BALANCED MODE ACTIVATED!`n`n- CPU Clock: Capped at 3.5 GHz (Sweet Spot)`n- Thermals: ~72C - 78C`n- High FPS without 95C overheating!`n- Best for: Valorant, Competitive Gaming, Multitasking", "CalmDown", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     $form.Close()
 }
 
@@ -52,13 +52,13 @@ function Set-BeastTurbo {
     powercfg /setdcvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 2
     powercfg /setactive SCHEME_CURRENT
     [System.Media.SystemSounds]::Asterisk.Play()
-    [System.Windows.Forms.MessageBox]::Show("BEAST TURBO MODE ACTIVATED!`n`n- CPU Clock: Full Uncapped Turbo Boost`n- Power: Max Wattage (High Thermals)`n- Best for: 4K Video Exports, Code Compiling, Heavy Benchmarks", "CoolBoost Control", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    [System.Windows.Forms.MessageBox]::Show("BEAST TURBO MODE ACTIVATED!`n`n- CPU Clock: Full Uncapped Turbo Boost`n- Power: Max Wattage (High Thermals)`n- Best for: 4K Video Exports, Code Compiling, Heavy Benchmarks", "CalmDown", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
     $form.Close()
 }
 
 # Create GUI
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "CoolBoost Control - " + $cpuName
+$form.Text = "CalmDown - " + $cpuName
 $form.Size = New-Object System.Drawing.Size(470, 390)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -118,7 +118,7 @@ $lblFooter.Location = New-Object System.Drawing.Point(25, 300)
 $lblFooter.Size = New-Object System.Drawing.Size(410, 35)
 $lblFooter.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Regular)
 $lblFooter.ForeColor = [System.Drawing.Color]::Gray
-$lblFooter.Text = "CoolBoost Control by Anurag Kumar | Open-Source on GitHub`nApplies changes dynamically to the active Windows power scheme."
+$lblFooter.Text = "CalmDown by Anurag Kumar | Open-Source on GitHub`nApplies changes dynamically to the active Windows power scheme."
 $form.Controls.Add($lblFooter)
 
 [void]$form.ShowDialog()
