@@ -1,0 +1,9 @@
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary / Log files
+*.log
+*.tmp
