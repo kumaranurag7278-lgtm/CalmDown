@@ -25,6 +25,13 @@ namespace CalmDown
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => {
+                try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown", "crash.log"), e.ExceptionObject.ToString()); } catch {}
+            };
+            Application.ThreadException += (s, e) => {
+                try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown", "crash.log"), e.Exception.ToString()); } catch {}
+            };
 
             // Handle CLI flags if passed
             if (args != null && args.Length > 0)
@@ -582,72 +589,79 @@ namespace CalmDown
             backgroundTimer = new Timer { Interval = 2500 };
             backgroundTimer.Tick += (s, e) =>
             {
-                int currentLoad = CpuMonitor.GetCurrentLoad();
-                if (currentLoad < 0) currentLoad = 0;
-
-                // 1. Check for Active Games
-                bool gameRunning = false;
-                if (chkAutoPilot.Checked)
+                try
                 {
-                    foreach (string procName in WatchedProcesses)
-                    {
-                        if (Process.GetProcessesByName(procName).Length > 0)
-                        {
-                            gameRunning = true;
-                            break;
-                        }
-                    }
+                    int currentLoad = CpuMonitor.GetCurrentLoad();
+                    if (currentLoad < 0) currentLoad = 0;
 
-                    if (gameRunning && !isGameActive)
+                    // 1. Check for Active Games
+                    bool gameRunning = false;
+                    if (chkAutoPilot.Checked)
                     {
-                        isGameActive = true;
-                        PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true);
-                        trayIcon.ShowBalloonTip(1800, "🎮 Game Detected", "CalmDown locked Sweet-Spot Mode (3.5 GHz) for smooth FPS.", ToolTipIcon.Info);
-                    }
-                    else if (!gameRunning && isGameActive)
-                    {
-                        isGameActive = false;
-                        PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled, true);
-                        trayIcon.ShowBalloonTip(1800, "❄️ Game Closed", "CalmDown returned to Ice-Cold Mode. Cooling down.", ToolTipIcon.Info);
-                    }
-                }
-
-                // 2. Dynamic Governor (CPU load based) - only active if game is NOT overriding
-                if (chkDynamicGovernor.Checked && !gameRunning)
-                {
-                    if (currentLoad >= 85)
-                    {
-                        heavyLoadCount++;
-                        midLoadCount = 0;
-                        lowLoadCount = 0;
-                        if (heavyLoadCount >= 2) // Sustained heavy load (5s)
+                        foreach (string procName in WatchedProcesses)
                         {
-                            PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive, true);
+                            if (Process.GetProcessesByName(procName).Length > 0)
+                            {
+                                gameRunning = true;
+                                break;
+                            }
                         }
-                    }
-                    else if (currentLoad >= 25 && currentLoad < 85)
-                    {
-                        midLoadCount++;
-                        heavyLoadCount = 0;
-                        lowLoadCount = 0;
-                        if (midLoadCount >= 2) // Sustained medium load (5s)
+
+                        if (gameRunning && !isGameActive)
                         {
+                            isGameActive = true;
                             PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true);
+                            trayIcon.ShowBalloonTip(1800, "🎮 Game Detected", "CalmDown locked Sweet-Spot Mode (3.5 GHz) for smooth FPS.", ToolTipIcon.Info);
                         }
-                    }
-                    else // < 20%
-                    {
-                        lowLoadCount++;
-                        heavyLoadCount = 0;
-                        midLoadCount = 0;
-                        if (lowLoadCount >= 2) // Sustained low load (5s)
+                        else if (!gameRunning && isGameActive)
                         {
+                            isGameActive = false;
                             PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled, true);
+                            trayIcon.ShowBalloonTip(1800, "❄️ Game Closed", "CalmDown returned to Ice-Cold Mode. Cooling down.", ToolTipIcon.Info);
                         }
                     }
-                }
 
-                RefreshStatus(currentLoad);
+                    // 2. Dynamic Governor (CPU load based) - only active if game is NOT overriding
+                    if (chkDynamicGovernor.Checked && !gameRunning)
+                    {
+                        if (currentLoad >= 85)
+                        {
+                            heavyLoadCount++;
+                            midLoadCount = 0;
+                            lowLoadCount = 0;
+                            if (heavyLoadCount >= 2) // Sustained heavy load (5s)
+                            {
+                                PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive, true);
+                            }
+                        }
+                        else if (currentLoad >= 25 && currentLoad < 85)
+                        {
+                            midLoadCount++;
+                            heavyLoadCount = 0;
+                            lowLoadCount = 0;
+                            if (midLoadCount >= 2) // Sustained medium load (5s)
+                            {
+                                PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true);
+                            }
+                        }
+                        else // < 20%
+                        {
+                            lowLoadCount++;
+                            heavyLoadCount = 0;
+                            midLoadCount = 0;
+                            if (lowLoadCount >= 2) // Sustained low load (5s)
+                            {
+                                PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled, true);
+                            }
+                        }
+                    }
+
+                    RefreshStatus(currentLoad);
+                }
+                catch (Exception ex)
+                {
+                    try { File.AppendAllText("error.log", ex.ToString() + "\n"); } catch {}
+                }
             };
             backgroundTimer.Start();
         }
@@ -711,7 +725,14 @@ namespace CalmDown
 
             lblActiveBadge.Text = string.Format("ACTIVE: {0}{1}  |  CPU: {2}%", modeName, autoTag, currentLoad);
             lblActiveBadge.ForeColor = modeColor;
-            trayIcon.Text = string.Format("CalmDown: {0} ({1}%)", modeName.Length > 20 ? modeName.Substring(0, 18) + ".." : modeName, currentLoad);
+
+            try
+            {
+                string trayStr = string.Format("CalmDown: {0}% ({1})", currentLoad, modeName);
+                if (trayStr.Length > 63) trayStr = trayStr.Substring(0, 60) + "...";
+                trayIcon.Text = trayStr;
+            }
+            catch { }
         }
     }
 }
