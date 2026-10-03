@@ -62,6 +62,23 @@ If you own an **Acer ALG / Nitro, Lenovo LOQ / Legion, HP Victus, or ASUS TUF** 
 
 ---
 
+## 🥊 CalmDown vs OEM Control Center (Why OEM Software Fails)
+
+Laptop manufacturers ship generic Control Centers (Acer, Lenovo Vantage, ASUS Armoury Crate) that fail to solve high thermals. Here is why:
+
+> **The Stove Analogy:** When your kitchen stove is on maximum blast (115W), your kitchen catches fire. OEM Control Centers try calling the fire brigade (spinning the fans to 100% jet-engine noise), but the stove keeps burning at 115W.  
+> **CalmDown simply turns down the stove knob (25W–45W).** No excess heat is generated in the first place, keeping the laptop ice-cold without needing loud fans.
+
+| Feature | OEM Control Center (Acer / Lenovo / ASUS) | CalmDown.exe |
+| :--- | :--- | :--- |
+| **Primary Method** | Cranking fans to 100% noise & broad wattage buckets | Directly capping CPU clock speed ceilings (2.4 GHz / 3.5 GHz) |
+| **Intel 4.9 GHz Spikes** | **Cannot stop them.** CPU still dumps 1.35V on small tasks | **100% blocked.** CPU cannot exceed target clock limit |
+| **Gaming Temp** | **92°C – 95°C+** (Thermal throttling) | **76°C** (Smooth & stable) |
+| **Resource Footprint** | Heavy (200MB+ RAM, 5-6 background services, telemetry) | **11 KB standalone binary**, 0% background RAM when closed |
+| **Fan Noise** | Loud / Jet-Engine whine | Quiet & comfortable |
+
+---
+
 ## 🚀 Quick Start (Installation in 5 Seconds)
 
 ### Step 1: Download
