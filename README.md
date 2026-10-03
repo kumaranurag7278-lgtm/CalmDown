@@ -1,12 +1,23 @@
-# 🧘 CalmDown
+# 🧘 CalmDown v2.0
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com/windows)
-[![Binary](https://img.shields.io/badge/CalmDown.exe-11%20KB%20(Native%20Win32)-brightgreen.svg)]()
+[![Binary](https://img.shields.io/badge/CalmDown.exe-21%20KB%20(Native%20Win32)-brightgreen.svg)]()
 [![Tested Hardware](https://img.shields.io/badge/Tested%20On-Acer%20ALG%20(i7--13620H)-orange.svg)]()
 
-> **1-Click standalone tool to calm down overheating laptops.**  
-> Tested real-world drop: **9°C peak / ~5°C average reduction in Valorant**, and **~60°C–65°C during everyday study/browsing**.
+> **Smart CPU Thermal Governor & Auto-Pilot for Gaming Laptops.**  
+> Native 0-dependency Windows utility that caps aggressive turbo voltage spikes.  
+> Verified telemetry drop: **9°C peak / ~5°C average reduction in Valorant**, and **~60°C–65°C during everyday study/browsing**.
+
+---
+
+## 🚀 What's New in v2.0
+
+- 🎨 **Modern Dark Slate GUI:** Clean, responsive card-based interface with active mode badges and hover feedback.
+- 🎮 **Auto-Pilot Game Detection:** Automatically engages **Sweet-Spot Mode (3.5 GHz)** when games (`VALORANT`, `cs2`, `GTA5`, `r5apex`, `FortniteClient`, `Overwatch`) launch, and seamlessly reverts to **Ice-Cold Mode (~2.4 GHz)** when they close.
+- 📌 **System Tray Integration:** Minimizes cleanly to the taskbar notification area with right-click quick presets and balloon notifications.
+- ⚡ **CLI Automation Flags:** Scriptable via command line (`CalmDown.exe --ice`, `--sweet`, `--beast`, `--restore`) for game launchers or Task Scheduler.
+- 🛡️ **Safe Backup & 1-Click Restore:** Automatically backs up stock Windows power scheme indexes on first run and provides a dedicated "Reset to Stock" button.
 
 ---
 
@@ -14,7 +25,7 @@
 
 Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, i5-12450H**) are capable of massive clock speeds, but:
 
-1. **Aggressive Boost Curve:** Out of the box, Windows power schemes frequently set CPU boost to *Aggressive*. Even on moderate tasks, the CPU attempts to boost toward 4.9 GHz, drawing high wattage and voltage into compact laptop chassis.
+1. **Aggressive Boost Curve:** Out of the box, Windows power schemes set CPU boost to *Aggressive*. Even on moderate tasks, the CPU attempts to boost toward 4.9 GHz, drawing high wattage and voltage into compact laptop chassis.
 2. **Shared Cooling Pipes:** In many budget and mid-range gaming designs, the CPU and GPU share the same copper heatpipes. When the CPU runs hot, heat transfers across to the GPU.
 3. **Locked Undervolting:** On 12th/13th/14th Gen Intel H-series chips, undervolting is hardware-protected by firmware, so traditional tools cannot offset voltages.
 4. **OEM Software Limits:** Preinstalled Control Centers primarily ramp up fan curves to maximum noise rather than addressing the clock multiplier ceiling.
@@ -23,7 +34,7 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 
 ## 💡 The Solution: Frequency Capping & Boost Governor Presets
 
-**CalmDown** is an **11 KB standalone Windows executable (`CalmDown.exe`)** that interfaces directly with the **Windows Power Subsystem (`powercfg`)**. Instead of trying to undervolt or modify hardware, it manages the CPU frequency ceiling and boost governor to curb excessive voltage spikes.
+**CalmDown** is a **standalone native Windows executable (`CalmDown.exe`)** that interfaces directly with the **Windows Power Subsystem (`powercfg`)**. Instead of trying to undervolt or modify hardware, it manages the CPU frequency ceiling and boost governor to curb excessive voltage spikes.
 
 ---
 
@@ -31,7 +42,7 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 
 ```
 +---------------------------------------------------------------------------------+
-|                                    CalmDown                                     |
+|                                 CalmDown v2.0                                   |
 +---------------------------------------------------------------------------------+
 |  [1] ❄️ ICE-COLD MODE       [Base Clock ~2.4 GHz | ~60°C - 65°C (Idle/Study)]   |
 |      Silent Fans - Zero Keyboard Heat - Maximum Battery Efficiency              |
@@ -68,12 +79,26 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 
 ## 🥊 CalmDown vs Preinstalled OEM Software
 
-| Feature | OEM Control Center (Acer / Lenovo / ASUS) | CalmDown.exe |
+| Feature | OEM Control Center (Acer / Lenovo / ASUS) | CalmDown.exe v2.0 |
 | :--- | :--- | :--- |
 | **Method** | Cranks fans to high RPM & adjusts broad wattage targets | Directly caps CPU clock frequency ceiling via Windows ACPI |
 | **Boost Behavior** | CPU still spikes to maximum boost clocks under burst load | Restricts CPU multiplier ceiling to prevent high voltage spikes |
-| **Footprint** | 150MB+ RAM, multiple background services | **11 KB standalone binary**, 0% background RAM when closed |
-| **Workflow** | Often requires navigating nested menus | 1-click toggle with global hotkey (`Ctrl + Alt + C`) |
+| **Footprint** | 150MB+ RAM, multiple background services | **Native binary**, tiny memory footprint, 0 external runtimes |
+| **Auto-Pilot** | Manual profiles or locked proprietary modes | Automatic background game detection & seamless switching |
+| **Workflow** | Often requires navigating nested menus | 1-click toggle, global hotkey (`Ctrl + Alt + C`), tray context menu |
+
+---
+
+## 🖥️ Command-Line Interface (CLI)
+
+CalmDown can be called directly from shortcuts, terminal scripts, or custom game launchers:
+
+```cmd
+CalmDown.exe --ice       # Activate Ice-Cold Mode (Locked base frequency)
+CalmDown.exe --sweet     # Activate Sweet-Spot Mode (3.5 GHz cap)
+CalmDown.exe --beast     # Activate Beast Turbo Mode (Uncapped boost)
+CalmDown.exe --restore   # Reset to original stock power configuration
+```
 
 ---
 
@@ -94,9 +119,8 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 To verify the integrity of the standalone binary:
 
 - **File:** `CalmDown.exe`
-- **Size:** 11,264 bytes
 - **SHA-256 Checksum:**  
-  `83B244A53CDBAE4C6DF795F7344D75E317F0CEC994DA0EA6FAEE1AAE815A1377`
+  `E0A49D0CAFC724AD481E940F9217E78FB09BAC2C3D14BFAA4642A79D8B3AA994`
 
 You can verify the checksum in PowerShell:
 ```powershell
@@ -107,7 +131,7 @@ Get-FileHash CalmDown.exe -Algorithm SHA256
 
 ## 🛠️ Building from Source
 
-CalmDown is written in clean, standard C# and can be compiled natively using the built-in Windows .NET compiler without installing Visual Studio:
+CalmDown is written in clean C# and compiles natively using the built-in Windows .NET compiler without installing Visual Studio:
 
 ```cmd
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /platform:x64 /out:"CalmDown.exe" /r:System.Windows.Forms.dll,System.Drawing.dll,System.dll "src\Program.cs"
