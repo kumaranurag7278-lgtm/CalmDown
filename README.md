@@ -3,134 +3,129 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com/windows)
 [![Binary](https://img.shields.io/badge/CalmDown.exe-11%20KB%20(Native%20Win32)-brightgreen.svg)]()
-[![Hardware](https://img.shields.io/badge/CPUs-Intel%20Core%20%7C%20AMD%20Ryzen-orange.svg)]()
+[![Tested Hardware](https://img.shields.io/badge/Tested%20On-Acer%20ALG%20(i7--13620H)-orange.svg)]()
 
-> **1-Click standalone tool to calm down overheating gaming laptops from 95°C to 65°C without losing FPS.**  
-> Built for Acer, Lenovo, ASUS, HP, Dell & MSI laptops suffering from aggressive CPU voltage spikes.
-
----
-
-## 📌 The Problem: Why Modern Gaming Laptops Overheat
-
-If you own an **Acer ALG / Nitro, Lenovo LOQ / Legion, HP Victus, or ASUS TUF** laptop equipped with modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, i5-12450H**):
-
-1. **Aggressive Voltage Spikes:** Out of the box, Windows sets Intel Turbo Boost to *Aggressive*. Even when opening a browser tab or moving a window, the CPU violently spikes to **4.9 GHz**, pulling **80W–115W** of power.
-2. **Shared Copper Heatpipes:** In most gaming laptops, the CPU and GPU share the same copper cooling pipes. When the CPU runs at 95°C, it literally cooks the GPU alongside it.
-3. **Intel Undervolt Protection:** On 12th/13th/14th Gen H-series laptops, Intel has permanently hardware-locked voltage control. Traditional tools like ThrottleStop cannot undervolt these chips.
-4. **OEM Software is Useless:** Factory Control Centers (Acer, Lenovo, ASUS) only crank fans to 100% jet-engine noise without addressing the electrical root cause.
+> **1-Click standalone tool to calm down overheating laptops.**  
+> Tested real-world drop: **9°C peak / ~5°C average reduction in Valorant**, and **~60°C–65°C during everyday study/browsing**.
 
 ---
 
-## 💡 The Solution: Frequency Capping & Boost Governor Control
+## 📌 The Problem: Why Many Budget Gaming Laptops Overheat
 
-**CalmDown** is a pure native **11 KB Windows executable (`CalmDown.exe`)** that directly interfaces with the **Windows Power Subsystem**. By capping the clock ceiling at the exact inflection point before voltage skyrockets exponentially, you get **85%–90% of maximum CPU performance with 50% less heat**.
+Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, i5-12450H**) are capable of massive clock speeds, but:
+
+1. **Aggressive Boost Curve:** Out of the box, Windows power schemes frequently set CPU boost to *Aggressive*. Even on moderate tasks, the CPU attempts to boost toward 4.9 GHz, drawing high wattage and voltage into compact laptop chassis.
+2. **Shared Cooling Pipes:** In many budget and mid-range gaming designs, the CPU and GPU share the same copper heatpipes. When the CPU runs hot, heat transfers across to the GPU.
+3. **Locked Undervolting:** On 12th/13th/14th Gen Intel H-series chips, undervolting is hardware-protected by firmware, so traditional tools cannot offset voltages.
+4. **OEM Software Limits:** Preinstalled Control Centers primarily ramp up fan curves to maximum noise rather than addressing the clock multiplier ceiling.
 
 ---
 
-## 🎮 The 3 Operating Modes
+## 💡 The Solution: Frequency Capping & Boost Governor Presets
+
+**CalmDown** is an **11 KB standalone Windows executable (`CalmDown.exe`)** that interfaces directly with the **Windows Power Subsystem (`powercfg`)**. Instead of trying to undervolt or modify hardware, it manages the CPU frequency ceiling and boost governor to curb excessive voltage spikes.
+
+---
+
+## 🎮 The 3 Operating Presets
 
 ```
 +---------------------------------------------------------------------------------+
 |                                    CalmDown                                     |
 +---------------------------------------------------------------------------------+
-|  [1] ❄️ ICE-COLD MODE       [Base Clock ~2.4 GHz | ~60°C - 65°C]                |
-|      Silent Fans - Zero Keyboard Heat - Maximum Battery Life                    |
+|  [1] ❄️ ICE-COLD MODE       [Base Clock ~2.4 GHz | ~60°C - 65°C (Idle/Study)]   |
+|      Silent Fans - Zero Keyboard Heat - Maximum Battery Efficiency              |
 |      👉 Best for: Normal Study, Web Browsing, YouTube, Daily Tasks              |
 +---------------------------------------------------------------------------------+
 |  [2] ⚖️ SWEET-SPOT BALANCED  [Capped at 3.5 GHz | ~72°C - 78°C]                  |
-|      High FPS - Zero Thermal Throttling - Controlled Thermals                   |
-|      👉 Best for: Valorant, CS2, Competitive Gaming, Multitasking               |
+|      High Clock Headroom - Prevents Severe Spikes - Controlled Heat             |
+|      👉 Best for: Valorant, Competitive Gaming, Multitasking                    |
 +---------------------------------------------------------------------------------+
-|  [3] 🔥 BEAST TURBO          [Max Uncapped 4.9 GHz | Full Power]                 |
-|      100% Uncapped Speed - Max 115W Boost - Peak Clock Speeds                   |
+|  [3] 🔥 BEAST TURBO          [Uncapped 4.9 GHz Boost | Full Power]              |
+|      Standard Windows Turbo Profile - Maximum Power & Throughput                |
 |      👉 Best for: 4K Video Exports, Code Compilation, Heavy Benchmarks          |
 +---------------------------------------------------------------------------------+
 ```
 
 ---
 
-## 📊 Real-World Benchmark (Tested in Valorant on Acer ALG i7-13620H + RTX 3050)
+## 📊 Verified Real-World Benchmark (Tested in Valorant)
 
-| Metric | Stock Windows Settings (Powerful Mode) | CalmDown (Ice-Cold Mode) | Improvement |
+*Tested on: Acer ALG AL15G (Intel Core i7-13620H, NVIDIA RTX 3050 6GB, 16GB RAM, FPS capped at 114).*
+
+| Metric | Stock Windows Boost (Powerful Mode) | CalmDown (Ice-Cold Mode) | Verified Difference |
 | :--- | :---: | :---: | :---: |
-| **Peak (Max) CPU Temp** | **92°C** 🚨 (Thermal Throttling) | **83°C** ❄️ | **9°C Cooler!** |
-| **Average CPU Temp** | **81.7°C** | **76.8°C** | **~5°C Constant Drop** |
-| **CPU Clock Behavior** | Aggressive 4.5+ GHz Spikes | **Rock-solid 2.4 GHz** | Zero heat spikes |
-| **Valorant FPS** | 114 FPS (Locked) | **114 FPS (Locked)** | **Identical FPS, zero drops** |
-| **Average GPU Temp** | 70.8°C | **69.7°C** | Runs super cool |
-| **GPU Power Draw** | 31.8W | **32.5W** | Relaxed load |
+| **Peak (Max) CPU Temp** | **92°C** (Near Thermal Throttling) | **83°C** | **9°C Cooler Peak** |
+| **Average CPU Temp** | **81.7°C** | **76.8°C** | **4.9°C Lower Average** |
+| **CPU Clock Behavior** | Frequent 4.5+ GHz spikes | **Steady 2.4 GHz base** | Spikes smoothed out |
+| **Valorant FPS** | 114 FPS (Locked) | **114 FPS (Locked)** | **Stable, zero frame drops** |
+| **Average GPU Temp** | 70.8°C | **69.7°C** | Remained cool |
+| **Average GPU Power** | 31.8W | **32.5W** | Identical power draw |
+
+> *Note: In non-gaming everyday workloads (web browsing, studying, YouTube), CPU temperatures sit comfortably at **~60°C–65°C** with near-silent fans.*
 
 ---
 
-## 🥊 CalmDown vs OEM Control Center (Why OEM Software Fails)
-
-Laptop manufacturers ship generic Control Centers (Acer, Lenovo Vantage, ASUS Armoury Crate) that fail to solve high thermals. Here is why:
-
-> **The Stove Analogy:** When your kitchen stove is on maximum blast (115W), your kitchen catches fire. OEM Control Centers try calling the fire brigade (spinning the fans to 100% jet-engine noise), but the stove keeps burning at 115W.  
-> **CalmDown simply turns down the stove knob (25W–45W).** No excess heat is generated in the first place, keeping the laptop ice-cold without needing loud fans.
+## 🥊 CalmDown vs Preinstalled OEM Software
 
 | Feature | OEM Control Center (Acer / Lenovo / ASUS) | CalmDown.exe |
 | :--- | :--- | :--- |
-| **Primary Method** | Cranking fans to 100% noise & broad wattage buckets | Directly capping CPU clock speed ceilings (2.4 GHz / 3.5 GHz) |
-| **Intel 4.9 GHz Spikes** | **Cannot stop them.** CPU still dumps 1.35V on small tasks | **100% blocked.** CPU cannot exceed target clock limit |
-| **Gaming Temp** | **92°C – 95°C+** (Thermal throttling) | **76°C** (Smooth & stable) |
-| **Resource Footprint** | Heavy (200MB+ RAM, 5-6 background services, telemetry) | **11 KB standalone binary**, 0% background RAM when closed |
-| **Fan Noise** | Loud / Jet-Engine whine | Quiet & comfortable |
+| **Method** | Cranks fans to high RPM & adjusts broad wattage targets | Directly caps CPU clock frequency ceiling via Windows ACPI |
+| **Boost Behavior** | CPU still spikes to maximum boost clocks under burst load | Restricts CPU multiplier ceiling to prevent high voltage spikes |
+| **Footprint** | 150MB+ RAM, multiple background services | **11 KB standalone binary**, 0% background RAM when closed |
+| **Workflow** | Often requires navigating nested menus | 1-click toggle with global hotkey (`Ctrl + Alt + C`) |
 
 ---
 
-## 🚀 Quick Start (Installation in 5 Seconds)
+## 🚀 Quick Start
 
-### Step 1: Download
-- Click **Code** ➡️ **Download ZIP** on this GitHub page.
-- Extract the ZIP anywhere on your PC.
+### Option A: 1-Click Installer (Recommended)
+1. Download or clone this repository.
+2. Double-click **`Install.bat`**.
+3. A desktop shortcut named **CalmDown** is created with hotkey **`Ctrl + Alt + C`**.
 
-### Step 2: Install
-- Double-click **`Install.bat`**.
-- It will automatically:
-  - Copy `CalmDown.exe` to `%LOCALAPPDATA%\CalmDown`.
-  - Create a **Desktop Shortcut** with a custom icon.
-  - Bind the global hotkey: <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd>.
+### Option B: Standalone Portable Use
+- Simply run **`CalmDown.exe`** directly from the root folder. No installation or setup required.
 
-### Step 3: Use
-- Double-click the **CalmDown** desktop shortcut or press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd> anywhere in Windows.
-- Click your desired mode, and it applies instantly without restarting!
+---
+
+## 🔒 Security & Verification
+
+To verify the integrity of the standalone binary:
+
+- **File:** `CalmDown.exe`
+- **Size:** 11,264 bytes
+- **SHA-256 Checksum:**  
+  `BD0FC8897CC0D83E69AE1425CF3A2BE4131C5A188241F8F3733FBFBB226CFB45`
+
+You can verify the checksum in PowerShell:
+```powershell
+Get-FileHash CalmDown.exe -Algorithm SHA256
+```
 
 ---
 
 ## 🛠️ Building from Source
 
-CalmDown is written in C# and can be compiled natively on any Windows PC without installing Visual Studio:
+CalmDown is written in clean, standard C# and can be compiled natively using the built-in Windows .NET compiler without installing Visual Studio:
 
 ```cmd
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /platform:x64 /out:"bin\CalmDown.exe" /r:System.Windows.Forms.dll,System.Drawing.dll,System.dll "src\Program.cs"
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /platform:x64 /out:"CalmDown.exe" /r:System.Windows.Forms.dll,System.Drawing.dll,System.dll "src\Program.cs"
 ```
 
 ---
 
-## ❓ Frequently Asked Questions (FAQ)
+## 💻 Compatibility & Scope
 
-### Does this disable or harm my GPU?
-**No.** Your discrete GPU (NVIDIA RTX 3050, 4060, etc.) remains 100% active at full graphics power. CalmDown only manages CPU boost behavior. In fact, your GPU will run significantly cooler because the CPU isn't transferring 92°C of heat through the shared cooling pipes.
-
-### Does this void my laptop warranty?
-**No.** CalmDown uses standard, native Windows ACPI power management parameters (`powercfg`). It does not modify BIOS, overclock, or overvolt your hardware.
-
-### How do I uninstall it?
-Simply double-click **`Uninstall.bat`**. It instantly restores stock Windows power settings and deletes the shortcut and files.
-
----
-
-## 💻 Compatibility
-
-- **OS:** Windows 10 (20H2+) / Windows 11 (All versions)
-- **CPUs:** Intel Core (10th, 11th, 12th, 13th, 14th Gen, Core Ultra) & AMD Ryzen (4000, 5000, 6000, 7000, 8000 series)
-- **Laptops:** Acer (ALG, Nitro, Predator), Lenovo (LOQ, Legion, IdeaPad Gaming), ASUS (TUF, ROG Zephyrus), HP (Victus, Omen), Dell (G15, Alienware), MSI, and Clevo/Tongfang ODMs.
+- **Primary Tested System:** Acer ALG AL15G (Intel Core i7-13620H + RTX 3050).
+- **System Requirements:** Windows 10 (20H2+) or Windows 11.
+- **Expected Compatibility:** Intel 12th, 13th, and 14th Gen H/HX processors on laptops where Windows ACPI power management controls are supported.
+- **Safety:** CalmDown only calls native Windows `powercfg` settings. It does not flash BIOS, modify voltages below hardware specification, or alter physical fan controller firmware.
 
 ---
 
 ## 📜 License
 
-Released under the [MIT License](LICENSE). Free for personal and commercial use.
+Released under the [MIT License](LICENSE).
 
-**Created with ❤️ by [Anurag Kumar](https://github.com/kumaranurag7278-lgtm)**
+**Created by [Anurag Kumar](https://github.com/kumaranurag7278-lgtm)**
