@@ -161,7 +161,7 @@ namespace CalmDown
 
             // 1. System Overview
             Console.WriteLine(string.Format("  CalmDown Version   : {0}", "v3.0"));
-            Console.WriteLine(string.Format("  OS Version         : {0}", Environment.OSVersion.VersionString));
+            Console.WriteLine(string.Format("  OS Version         : {0}", GetOSVersionDescription()));
             Console.WriteLine(string.Format("  CPU Name           : {0}", HardwareMonitor.GetProcessorName()));
             Console.WriteLine(string.Format("  Logical Processors : {0}", Environment.ProcessorCount));
             Console.WriteLine();
@@ -288,6 +288,63 @@ namespace CalmDown
             if (s == "00000000-0000-0000-0000-000000000000") return "Balanced";
             if (s == "ded574b5-45a0-4f42-8737-46345c09c238") return "Best Performance";
             return "Unknown overlay (" + s + ")";
+        }
+
+        public static string GetOSVersionDescription()
+        {
+            try
+            {
+                string subKey = @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+                object prodObj = Registry.GetValue(subKey, "ProductName", null);
+                object dispObj = Registry.GetValue(subKey, "DisplayVersion", null);
+                object relObj = Registry.GetValue(subKey, "ReleaseId", null);
+                object buildObj = Registry.GetValue(subKey, "CurrentBuild", null);
+                if (buildObj == null)
+                {
+                    buildObj = Registry.GetValue(subKey, "CurrentBuildNumber", null);
+                }
+                object ubrObj = Registry.GetValue(subKey, "UBR", null);
+
+                string buildStr = (buildObj != null && !string.IsNullOrEmpty(buildObj.ToString().Trim())) ? buildObj.ToString().Trim() : "unknown";
+                string ubrStr = (ubrObj != null && !string.IsNullOrEmpty(ubrObj.ToString().Trim())) ? ubrObj.ToString().Trim() : "unknown";
+
+                int buildNum = 0;
+                int.TryParse(buildStr, out buildNum);
+
+                string product;
+                if (buildNum >= 22000)
+                {
+                    product = "Windows 11";
+                }
+                else if (prodObj != null && !string.IsNullOrEmpty(prodObj.ToString().Trim()))
+                {
+                    product = prodObj.ToString().Trim();
+                }
+                else
+                {
+                    product = "unknown";
+                }
+
+                string version;
+                if (dispObj != null && !string.IsNullOrEmpty(dispObj.ToString().Trim()))
+                {
+                    version = dispObj.ToString().Trim();
+                }
+                else if (relObj != null && !string.IsNullOrEmpty(relObj.ToString().Trim()))
+                {
+                    version = relObj.ToString().Trim();
+                }
+                else
+                {
+                    version = "unknown";
+                }
+
+                return string.Format("{0} {1} (build {2}.{3})", product, version, buildStr, ubrStr);
+            }
+            catch
+            {
+                return "unknown";
+            }
         }
 
         private static void PrintOemTools()
