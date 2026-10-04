@@ -575,6 +575,51 @@ namespace CalmDown
             Assert("Overlay name mapping: Case-insensitive upper-case GUID", Diagnostic.GetOverlayFriendlyName(new Guid("961CC777-2547-4F9D-8174-7D86181B8A7A")) == "Best Power Efficiency");
             Assert("Overlay name mapping: Unknown overlay GUID", Diagnostic.GetOverlayFriendlyName(new Guid("11111111-2222-3333-4444-555555555555")) == "Unknown overlay (11111111-2222-3333-4444-555555555555)");
 
+            // 14. Rules Migration Tests against temp directory
+            string tempTestDir = Path.Combine(Path.GetTempPath(), "CalmDown_Test_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                // (a) fresh dir gets defaults + marker
+                string freshDir = Path.Combine(tempTestDir, "fresh");
+                ConfigManager.MigrateRules(freshDir);
+                string freshRules = Path.Combine(freshDir, "rules.ini");
+                bool freshExists = File.Exists(freshRules);
+                string freshContent = freshExists ? File.ReadAllText(freshRules) : "";
+                bool freshHasMarker = freshContent.IndexOf("rules-version=3", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool freshHasVal = freshContent.IndexOf("VALORANT", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool freshHasCs2 = freshContent.IndexOf("cs2", StringComparison.OrdinalIgnoreCase) >= 0;
+                Assert("Rules Migration (a): Fresh directory creates defaults with marker", freshExists && freshHasMarker && freshHasVal && freshHasCs2);
+
+                // (b) existing file with a user line \"Blender = Beast\" keeps it and gets missing defaults once
+                string existingDir = Path.Combine(tempTestDir, "existing");
+                Directory.CreateDirectory(existingDir);
+                string existingRules = Path.Combine(existingDir, "rules.ini");
+                File.WriteAllText(existingRules, "Blender = Beast\r\n");
+                ConfigManager.MigrateRules(existingDir);
+                string migratedContent = File.ReadAllText(existingRules);
+                bool keepsBlender = migratedContent.IndexOf("Blender = Beast", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasCs2Migrated = migratedContent.IndexOf("cs2 = Sweet", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasMarkerMigrated = migratedContent.IndexOf("rules-version=3", StringComparison.OrdinalIgnoreCase) >= 0;
+                Assert("Rules Migration (b): Preserves custom user line and appends missing defaults + marker", keepsBlender && hasCs2Migrated && hasMarkerMigrated);
+
+                // (c) delete \"cs2\" after migration, run the migration again, assert it is NOT re-added
+                var linesWithoutCs2 = new List<string>();
+                foreach (string line in File.ReadAllLines(existingRules))
+                {
+                    if (line.Trim().StartsWith("cs2", StringComparison.OrdinalIgnoreCase)) continue;
+                    linesWithoutCs2.Add(line);
+                }
+                File.WriteAllLines(existingRules, linesWithoutCs2.ToArray());
+                ConfigManager.MigrateRules(existingDir);
+                string contentAfterSecondRun = File.ReadAllText(existingRules);
+                bool cs2Readded = contentAfterSecondRun.IndexOf("cs2", StringComparison.OrdinalIgnoreCase) >= 0;
+                Assert("Rules Migration (c): Deleted rule is NOT re-added on subsequent migration", !cs2Readded);
+            }
+            finally
+            {
+                try { if (Directory.Exists(tempTestDir)) Directory.Delete(tempTestDir, true); } catch { }
+            }
+
             Console.WriteLine("---------------------------------------------------------");
             Console.WriteLine("   [RESULT] All Governor State Machine Asserts Passed!  ");
             Console.WriteLine("=========================================================");
@@ -810,14 +855,20 @@ namespace CalmDown
             "FortniteClient-Win64-Shipping = Sweet"
         };
 
-        public static void LoadRules()
+        public const string RulesMigrationMarker = "# rules-version=3";
+
+        public static void MigrateRules(string targetDir)
         {
             try
             {
-                if (!Directory.Exists(ConfigDir)) Directory.CreateDirectory(ConfigDir);
-                if (!File.Exists(RulesFile))
+                if (!Directory.Exists(targetDir)) Directory.CreateDirectory(targetDir);
+                string rulesFile = Path.Combine(targetDir, "rules.ini");
+                string tempFile = Path.Combine(targetDir, "rules.tmp");
+
+                if (!File.Exists(rulesFile))
                 {
-                    string defaultRules = "# CalmDown Per-Process Rules (executable_name = Sweet / Beast / Ice)\r\n" +
+                    string defaultRules = RulesMigrationMarker + "\r\n" +
+                                          "# CalmDown Per-Process Rules (executable_name = Sweet / Beast / Ice)\r\n" +
                                           "# Beast rules force full boost whenever the app is in the foreground,\r\n" +
                                           "# even when idle. Add them only if you accept higher heat.\r\n" +
                                           "VALORANT = Sweet\r\n" +
@@ -827,48 +878,85 @@ namespace CalmDown
                                           "r5apex = Sweet\r\n" +
                                           "Overwatch = Sweet\r\n" +
                                           "FortniteClient-Win64-Shipping = Sweet\r\n";
-                    File.WriteAllText(RulesFile, defaultRules);
-                }
-                else
-                {
-                    // Migration: preserve existing user rules, only append missing default game keys
-                    try
+                    File.WriteAllText(tempFile, defaultRules);
+                    if (File.Exists(rulesFile))
                     {
-                        string[] existingLines = File.ReadAllLines(RulesFile);
-                        var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        foreach (string rawLine in existingLines)
-                        {
-                            string l = rawLine.Trim();
-                            if (string.IsNullOrEmpty(l) || l.StartsWith("#") || l.StartsWith(";")) continue;
-                            string[] p = l.Split('=');
-                            if (p.Length >= 1)
-                            {
-                                string k = p[0].Trim();
-                                if (k.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                                    k = k.Substring(0, k.Length - 4).Trim();
-                                existingKeys.Add(k);
-                            }
-                        }
-
-                        var toAppend = new List<string>();
-                        foreach (string def in DefaultGameRules)
-                        {
-                            string[] dp = def.Split('=');
-                            string dk = dp[0].Trim();
-                            if (!existingKeys.Contains(dk))
-                            {
-                                toAppend.Add(def);
-                                existingKeys.Add(dk);
-                            }
-                        }
-
-                        if (toAppend.Count > 0)
-                        {
-                            File.AppendAllLines(RulesFile, toAppend.ToArray());
-                        }
+                        try { File.Replace(tempFile, rulesFile, null); }
+                        catch { File.Copy(tempFile, rulesFile, true); File.Delete(tempFile); }
                     }
-                    catch { }
+                    else
+                    {
+                        File.Move(tempFile, rulesFile);
+                    }
+                    return;
                 }
+
+                // Existing rules.ini: check if marker is present
+                string[] existingLines = File.ReadAllLines(rulesFile);
+                bool hasMarker = false;
+                foreach (string rawLine in existingLines)
+                {
+                    string l = rawLine.Trim();
+                    if (l.IndexOf("rules-version=3", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        hasMarker = true;
+                        break;
+                    }
+                }
+
+                // If marker present: never append anything. Never edit or remove user lines.
+                if (hasMarker)
+                {
+                    return;
+                }
+
+                // Marker NOT present: append missing default game keys one time, then set the marker.
+                var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string rawLine in existingLines)
+                {
+                    string l = rawLine.Trim();
+                    if (string.IsNullOrEmpty(l) || l.StartsWith("#") || l.StartsWith(";")) continue;
+                    string[] p = l.Split('=');
+                    if (p.Length >= 1)
+                    {
+                        string k = p[0].Trim();
+                        if (k.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                            k = k.Substring(0, k.Length - 4).Trim();
+                        existingKeys.Add(k);
+                    }
+                }
+
+                var toAppend = new List<string>();
+                foreach (string def in DefaultGameRules)
+                {
+                    string[] dp = def.Split('=');
+                    string dk = dp[0].Trim();
+                    if (!existingKeys.Contains(dk))
+                    {
+                        toAppend.Add(def);
+                        existingKeys.Add(dk);
+                    }
+                }
+
+                var newLines = new List<string>(existingLines);
+                foreach (string def in toAppend)
+                {
+                    newLines.Add(def);
+                }
+                newLines.Add(RulesMigrationMarker);
+
+                File.WriteAllLines(tempFile, newLines.ToArray());
+                try { File.Replace(tempFile, rulesFile, null); }
+                catch { File.Copy(tempFile, rulesFile, true); File.Delete(tempFile); }
+            }
+            catch { }
+        }
+
+        public static void LoadRules()
+        {
+            try
+            {
+                MigrateRules(ConfigDir);
 
                 AppRules.Clear();
                 foreach (string rawLine in File.ReadAllLines(RulesFile))

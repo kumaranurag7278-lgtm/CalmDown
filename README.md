@@ -24,7 +24,7 @@
   - Automatically strips `.exe` suffixes and matches shipping executables (`VALORANT-Win64-Shipping`).
   - **4-Second Alt-Tab Grace Period:** Prevents profile thrashing and notification spam during brief focus changes.
   - **Exact Pre-Rule Snapshot:** Captures exact live hardware ACPI indices upon rule entry and cleanly restores them on exit.
-- 🧪 **Comprehensive Governor Verification (`--selftest`):** Full CLI test suite (`CalmDown.exe --selftest`) asserting all 20 state machine transitions, including clock-dependent low-side and high-side workload scaling.
+- 🧪 **Comprehensive Governor Verification (`--selftest`):** Full CLI test suite (`CalmDown.exe --selftest`) asserting all 28 state machine and subsystem transitions, including clock-dependent scaling, overlay mapping, and rules migration.
 - ⏱️ **Non-Destructive Latency Benchmark (`--bench`):** Measures native Win32 `powrprof` apply latency with `Stopwatch` across 5 sequential transitions, backing up settings first and guaranteeing full restore upon completion.
 - 📈 **Live GDI Hardware Sparkline:** Smooth rolling 50-point telemetry graph directly in the UI, visualizing real-time CPU load spikes.
 - 🛡️ **Driver-Free User-Space Design:** Operates entirely within standard user-space via documented Windows ACPI power APIs, avoiding third-party ring-0 kernel drivers.
@@ -105,7 +105,7 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 CalmDown can be called directly from shortcuts, terminal scripts, or custom game launchers:
 
 ```cmd
-CalmDown.exe --selftest  # Run Governor State Machine test suite (20 asserts)
+CalmDown.exe --selftest  # Run Governor State Machine & subsystem test suite (28 asserts)
 CalmDown.exe --bench     # Benchmark live Win32 PowrProf apply latency (Stopwatch)
 CalmDown.exe --diagnose  # Inspect live ACPI subsystem, overlay, and running OEM tools
 CalmDown.exe --ice       # Activate Ice-Cold Profile (Locked base frequency)
@@ -149,7 +149,7 @@ To verify the integrity of the standalone binary:
 
 - **File:** `CalmDown.exe`
 - **SHA-256 Checksum:**  
-  `138E2A2D784AC47425105FA6752CBCAE7A91735132C2325E8283FF4A0103143F`
+  `9B8512E12846A9B2054EA5E1922C2C1EA8AB425673695B30EB14EBAEC4E9A408`
 
 You can verify the checksum in PowerShell:
 ```powershell
