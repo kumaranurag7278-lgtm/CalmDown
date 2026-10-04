@@ -264,10 +264,75 @@ namespace CalmDown
             var m7 = sm.Process(5, 10, true);
             Assert("Game override locks Sweet-Spot Profile regardless of idle load", m7 == GovernorMode.SweetSpot);
 
+            // 10. Clock Model (a): Hot single-thread leaves Beast within 5 ticks and never returns
+            var smA = new GovernorStateMachine();
+            smA.Process(80, 95, false);
+            smA.Process(80, 95, false); // Escalated to Beast
+            bool leftBeastWithin5 = false;
+            bool returnedToBeast = false;
+            for (int tick = 1; tick <= 30; tick++)
+            {
+                // Single thread needing 3.6 GHz of one core (total 5.5 GHz with baseline -> avg ~7%, max ~73% at 4.9 GHz)
+                var m = TickWorkload(smA, 5.5, 3.6);
+                if (tick <= 5 && m != GovernorMode.BeastTurbo)
+                {
+                    leftBeastWithin5 = true;
+                }
+                if (leftBeastWithin5 && m == GovernorMode.BeastTurbo)
+                {
+                    returnedToBeast = true;
+                }
+            }
+            Assert("Clock Model (a): Hot single-thread leaves Beast within 5 ticks and never returns", leftBeastWithin5 && !returnedToBeast);
+
+            // 11. Clock Model (b): Sustained 55 GHz*threads for 40 ticks has at most 2 mode switches
+            var smB = new GovernorStateMachine();
+            int modeSwitches55 = 0;
+            GovernorMode lastModeB = smB.CurrentMode;
+            for (int tick = 1; tick <= 40; tick++)
+            {
+                var m = TickWorkload(smB, 55.0, 55.0 / 16.0);
+                if (m != lastModeB)
+                {
+                    modeSwitches55++;
+                    lastModeB = m;
+                }
+            }
+            Assert("Clock Model (b): Sustained 55 GHz*threads has at most 2 mode switches (no oscillation)", modeSwitches55 <= 2);
+
+            // 12. Clock Model (c): Sustained 45 GHz*threads settles in Sweet-Spot (not stuck in Beast)
+            var smC = new GovernorStateMachine();
+            for (int tick = 1; tick <= 40; tick++)
+            {
+                TickWorkload(smC, 45.0, 45.0 / 16.0);
+            }
+            Assert("Clock Model (c): Sustained 45 GHz*threads settles in Sweet-Spot (not stuck in Beast)", smC.CurrentMode == GovernorMode.SweetSpot);
+
             Console.WriteLine("---------------------------------------------------------");
             Console.WriteLine("   [RESULT] All Governor State Machine Asserts Passed!  ");
             Console.WriteLine("=========================================================");
             Console.WriteLine();
+        }
+
+        private static double GetClockForMode(GovernorMode mode)
+        {
+            switch (mode)
+            {
+                case GovernorMode.IceCold: return 2.4;
+                case GovernorMode.SweetSpot: return 3.5;
+                case GovernorMode.BeastTurbo: return 4.9;
+                default: return 2.4;
+            }
+        }
+
+        private static GovernorMode TickWorkload(GovernorStateMachine machine, double totalGhz, double maxCoreGhz)
+        {
+            double clock = GetClockForMode(machine.CurrentMode);
+            int avg = (int)Math.Round((totalGhz / (16.0 * clock)) * 100.0);
+            if (avg > 100) avg = 100;
+            int maxCore = (int)Math.Round((maxCoreGhz / clock) * 100.0);
+            if (maxCore > 100) maxCore = 100;
+            return machine.Process(avg, maxCore, false);
         }
 
         private static void Assert(string name, bool condition)
@@ -329,14 +394,14 @@ namespace CalmDown
             if (currentMode == GovernorMode.BeastTurbo)
             {
                 // In Beast Turbo (running at 4.9 GHz), identical workloads read ~30-40% lower.
-                // Maintain Beast Turbo while multi-core load remains sustained (avg >= 50% OR max >= 65%)
-                if (avgLoad >= 50 || maxCoreLoad >= 65)
+                // Maintain Beast Turbo only while multi-core load remains sustained (avg >= 50% AND max >= 60%)
+                if (avgLoad >= 50 && maxCoreLoad >= 60)
                 {
                     beastDwellTicks = 2; // Keep dwell hold full while heavy workload continues
                     return GovernorMode.BeastTurbo;
                 }
 
-                // Workload dropped below Beast retention threshold (<50% avg AND <65% max)
+                // Workload dropped below Beast retention threshold (<50% avg OR <60% max)
                 if (beastDwellTicks > 0)
                 {
                     beastDwellTicks--;
