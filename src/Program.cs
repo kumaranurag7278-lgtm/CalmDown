@@ -21,6 +21,13 @@ namespace CalmDown
         EfficientAggressive = 4
     }
 
+    internal enum GovernorMode
+    {
+        IceCold,
+        SweetSpot,
+        BeastTurbo
+    }
+
     static class Program
     {
         [DllImport("user32.dll", SetLastError = true)]
@@ -28,6 +35,9 @@ namespace CalmDown
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll")]
+        static extern bool AttachConsole(int dwProcessId);
 
         public const int HWND_BROADCAST = 0xffff;
         public static readonly int WM_SHOWCALMDOWN = RegisterWindowMessage("WM_SHOWCALMDOWN_MSG_CALMDOWN");
@@ -54,6 +64,10 @@ namespace CalmDown
                 string flag = args[0].Trim().ToLowerInvariant();
                 switch (flag)
                 {
+                    case "--selftest":
+                        AttachConsole(-1);
+                        SelfTest.Run();
+                        return;
                     case "--ice":
                     case "-i":
                         NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled, true, false);
@@ -106,27 +120,156 @@ namespace CalmDown
         }
     }
 
+    internal static class SelfTest
+    {
+        public static void Run()
+        {
+            Console.WriteLine();
+            Console.WriteLine("=========================================================");
+            Console.WriteLine("   CalmDown v3.0 Governor State Machine Self-Test");
+            Console.WriteLine("=========================================================");
+
+            var sm = new GovernorStateMachine();
+
+            // 1. Initial idle
+            var m1 = sm.Process(10, 15, false);
+            Assert("Initial low load stays in Ice-Cold Profile", m1 == GovernorMode.IceCold);
+
+            // 2. Transient single-core spike (1 tick)
+            var m2 = sm.Process(12, 92, false);
+            Assert("Transient 1-tick spike does NOT escalate directly to Beast Turbo", m2 != GovernorMode.BeastTurbo);
+
+            // 3. Sustained moderate load (2 ticks)
+            sm.Process(25, 60, false);
+            var m3 = sm.Process(28, 65, false);
+            Assert("Sustained moderate load steps up to Sweet-Spot Profile", m3 == GovernorMode.SweetSpot);
+
+            // 4. Single-core spike from Sweet-Spot
+            var m4 = sm.Process(25, 95, false);
+            Assert("Single-core spike in Sweet-Spot does NOT unlock Beast Turbo without multi-core demand", m4 == GovernorMode.SweetSpot);
+
+            // 5. Sustained Multi-Core Heavy Load (2 ticks with high avg AND high max)
+            sm.Process(80, 95, false);
+            var m5 = sm.Process(85, 98, false);
+            Assert("Sustained multi-core heavy load unlocks Beast Turbo Profile", m5 == GovernorMode.BeastTurbo);
+
+            // 6. Load drop holds dwell time in Sweet-Spot
+            var m6 = sm.Process(10, 15, false);
+            Assert("Load drop holds dwell in Sweet-Spot before releasing to Ice-Cold", m6 == GovernorMode.SweetSpot);
+
+            // 7. Active game override
+            var m7 = sm.Process(5, 10, true);
+            Assert("Game override locks Sweet-Spot Profile regardless of idle load", m7 == GovernorMode.SweetSpot);
+
+            Console.WriteLine("---------------------------------------------------------");
+            Console.WriteLine("   [RESULT] All Governor State Machine Asserts Passed!  ");
+            Console.WriteLine("=========================================================");
+            Console.WriteLine();
+        }
+
+        private static void Assert(string name, bool condition)
+        {
+            if (condition)
+            {
+                Console.WriteLine("  [PASS] " + name);
+            }
+            else
+            {
+                Console.WriteLine("  [FAIL] " + name);
+                Environment.ExitCode = 1;
+            }
+        }
+    }
+
+    internal class GovernorStateMachine
+    {
+        private GovernorMode currentMode = GovernorMode.IceCold;
+        private int stepDownDwellTicks = 0;
+        private int moderateSpikeCount = 0;
+        private int heavyMultiCoreSpikeCount = 0;
+
+        public GovernorMode CurrentMode { get { return currentMode; } }
+
+        public GovernorMode Process(int avgLoad, int maxCoreLoad, bool gameActive)
+        {
+            // Priority 1: Game Active -> Locks Sweet-Spot
+            if (gameActive)
+            {
+                currentMode = GovernorMode.SweetSpot;
+                stepDownDwellTicks = 3; // 6s hold
+                moderateSpikeCount = 0;
+                heavyMultiCoreSpikeCount = 0;
+                return currentMode;
+            }
+
+            // Priority 2: Heavy Multi-Core Load (>70% avg AND >85% max core) for 2 consecutive ticks
+            if (avgLoad >= 70 && maxCoreLoad >= 85)
+            {
+                heavyMultiCoreSpikeCount++;
+                moderateSpikeCount = 0;
+                if (heavyMultiCoreSpikeCount >= 2)
+                {
+                    currentMode = GovernorMode.BeastTurbo;
+                    stepDownDwellTicks = 3;
+                }
+                return currentMode;
+            }
+            else
+            {
+                heavyMultiCoreSpikeCount = 0;
+            }
+
+            // Priority 3: Moderate / Gaming Load (>25% max or >20% avg) for 2 consecutive ticks
+            if (maxCoreLoad >= 25 || avgLoad >= 20)
+            {
+                moderateSpikeCount++;
+                if (moderateSpikeCount >= 2)
+                {
+                    currentMode = GovernorMode.SweetSpot;
+                    stepDownDwellTicks = 3;
+                }
+                return currentMode;
+            }
+            else
+            {
+                moderateSpikeCount = 0;
+            }
+
+            // Priority 4: Low Load -> Release with Dwell Time
+            if (stepDownDwellTicks > 0)
+            {
+                stepDownDwellTicks--;
+                if (currentMode == GovernorMode.BeastTurbo)
+                {
+                    currentMode = GovernorMode.SweetSpot;
+                }
+                return currentMode;
+            }
+
+            currentMode = GovernorMode.IceCold;
+            return currentMode;
+        }
+    }
+
     internal static class ConfigManager
     {
         private static readonly string ConfigDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown");
         private static readonly string ConfigFile = Path.Combine(ConfigDir, "config.ini");
+        private static readonly string RulesFile = Path.Combine(ConfigDir, "rules.ini");
 
         public static bool DynamicGovernor { get; set; }
         public static bool GameAutoPilot { get; set; }
+        public static Dictionary<string, string> AppRules = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         static ConfigManager()
         {
             DynamicGovernor = false;
             GameAutoPilot = true;
-            if (File.Exists(ConfigFile))
-            {
-                Load();
-            }
-            else
-            {
-                Save();
-            }
+            if (File.Exists(ConfigFile)) Load();
+            else Save();
+
+            LoadRules();
         }
 
         public static void Load()
@@ -174,12 +317,50 @@ namespace CalmDown
             }
             catch { }
         }
+
+        public static void LoadRules()
+        {
+            try
+            {
+                if (!Directory.Exists(ConfigDir)) Directory.CreateDirectory(ConfigDir);
+                if (!File.Exists(RulesFile))
+                {
+                    // Create default rules file
+                    string defaultRules = "# CalmDown Per-Process Rules (app_name = Ice / Sweet / Beast)\r\n" +
+                                          "VALORANT = Sweet\r\n" +
+                                          "cs2 = Sweet\r\n" +
+                                          "GTA5 = Sweet\r\n" +
+                                          "r5apex = Sweet\r\n" +
+                                          "Overwatch = Sweet\r\n" +
+                                          "FortniteClient-Win64-Shipping = Sweet\r\n" +
+                                          "devenv = Beast\r\n" +
+                                          "Premiere = Beast\r\n" +
+                                          "Blender = Beast\r\n";
+                    File.WriteAllText(RulesFile, defaultRules);
+                }
+
+                AppRules.Clear();
+                foreach (string rawLine in File.ReadAllLines(RulesFile))
+                {
+                    string line = rawLine.Trim();
+                    if (string.IsNullOrEmpty(line) || line.StartsWith("#") || line.StartsWith(";")) continue;
+                    string[] parts = line.Split('=');
+                    if (parts.Length == 2)
+                    {
+                        AppRules[parts[0].Trim()] = parts[1].Trim();
+                    }
+                }
+            }
+            catch { }
+        }
     }
 
     internal static class NativePower
     {
         public const uint FREQ_UNCAPPED = 0;
         public const uint FREQ_SWEETSPOT_MHZ = 3500;
+
+        private static readonly object powerSyncLock = new object();
 
         // ACPI Guids from Windows PowrProf
         private static Guid SubGroupProcessor = new Guid("54533251-82be-4824-96c1-47b60b740d00");
@@ -191,9 +372,6 @@ namespace CalmDown
 
         [DllImport("powrprof.dll")]
         private static extern uint PowerReadACValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, out uint AcValueIndex);
-
-        [DllImport("powrprof.dll")]
-        private static extern uint PowerReadDCValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, out uint DcValueIndex);
 
         [DllImport("powrprof.dll")]
         private static extern uint PowerWriteACValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, uint AcValueIndex);
@@ -281,42 +459,44 @@ namespace CalmDown
 
         public static bool ApplyModeDirect(uint freqMhz, PerfBoostMode boostMode, bool writeAC = true, bool writeDC = false)
         {
-            // Avoid duplicate execution if already applied
-            if (cachedFreq == freqMhz && cachedBoost == (uint)boostMode)
+            lock (powerSyncLock)
             {
-                return true;
-            }
-
-            EnsureBackup();
-            Guid scheme;
-            if (!GetActiveSchemeGuid(out scheme)) return false;
-
-            bool ok = true;
-            if (writeAC)
-            {
-                if (PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, freqMhz) != 0 ||
-                    PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, (uint)boostMode) != 0)
+                if (cachedFreq == freqMhz && cachedBoost == (uint)boostMode)
                 {
-                    ok = false;
+                    return true;
                 }
-            }
 
-            if (writeDC)
-            {
-                if (PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, freqMhz) != 0 ||
-                    PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, (uint)boostMode) != 0)
+                EnsureBackup();
+                Guid scheme;
+                if (!GetActiveSchemeGuid(out scheme)) return false;
+
+                bool ok = true;
+                if (writeAC)
                 {
-                    ok = false;
+                    if (PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, freqMhz) != 0 ||
+                        PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, (uint)boostMode) != 0)
+                    {
+                        ok = false;
+                    }
                 }
-            }
 
-            if (ok)
-            {
-                PowerSetActiveScheme(IntPtr.Zero, ref scheme);
-                cachedFreq = freqMhz;
-                cachedBoost = (uint)boostMode;
+                if (writeDC)
+                {
+                    if (PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, freqMhz) != 0 ||
+                        PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, (uint)boostMode) != 0)
+                    {
+                        ok = false;
+                    }
+                }
+
+                if (ok)
+                {
+                    PowerSetActiveScheme(IntPtr.Zero, ref scheme);
+                    cachedFreq = freqMhz;
+                    cachedBoost = (uint)boostMode;
+                }
+                return ok;
             }
-            return ok;
         }
     }
 
@@ -336,8 +516,11 @@ namespace CalmDown
         [DllImport("ntdll.dll")]
         private static extern int NtQuerySystemInformation(int SystemInformationClass, IntPtr SystemInformation, int SystemInformationLength, out int ReturnLength);
 
-        [DllImport("shell32.dll")]
-        private static extern int SHQueryUserNotificationState(out int pquns);
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
         private static int coreCount = Environment.ProcessorCount;
         private static int structSize = Marshal.SizeOf(typeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION));
@@ -415,15 +598,21 @@ namespace CalmDown
             maxCoreLoad = Math.Max(0, Math.Min(100, maxCoreLoad));
         }
 
-        public static bool IsD3DFullscreenGameActive()
+        public static string GetForegroundProcessName()
         {
-            int state;
-            if (SHQueryUserNotificationState(out state) == 0)
+            try
             {
-                // QUNS_RUNNING_D3D_FULL_SCREEN = 3
-                return state == 3;
+                IntPtr hWnd = GetForegroundWindow();
+                if (hWnd == IntPtr.Zero) return "";
+                uint pid;
+                GetWindowThreadProcessId(hWnd, out pid);
+                if (pid == 0) return "";
+                using (var p = Process.GetProcessById((int)pid))
+                {
+                    return p.ProcessName;
+                }
             }
-            return false;
+            catch { return ""; }
         }
 
         public static string GetProcessorName()
@@ -475,19 +664,11 @@ namespace CalmDown
         private ToolStripMenuItem trayAutoPilotItem;
         private System.Windows.Forms.Timer backgroundTimer;
 
-        // Rolling 50-point telemetry sparkline history
+        private GovernorStateMachine stateMachine = new GovernorStateMachine();
         private List<int> telemetryHistory = new List<int>();
         private const int MaxHistoryPoints = 50;
 
-        // Auto-pilot watched games
-        private static readonly string[] WatchedProcesses = new[]
-        {
-            "VALORANT", "VALORANT-Win64-Shipping", "cs2", "GTA5", "Overwatch", "FortniteClient-Win64-Shipping", "r5apex"
-        };
         private bool isGameActive = false;
-
-        // Fast-attack, slow-release debounce timers
-        private int stepDownDwellTicks = 0;
 
         public MainForm()
         {
@@ -550,7 +731,7 @@ namespace CalmDown
 
             lblAcpiTarget = new Label
             {
-                Text = "Engine: Native powrprof.dll Win32 P/Invoke | Driver-Free | 0 BSOD Risk",
+                Text = "Engine: Native powrprof.dll Win32 P/Invoke | Driver-Free User Space",
                 Font = new Font("Consolas", 7.8f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(0, 200, 83),
                 Location = new Point(15, 30),
@@ -566,7 +747,6 @@ namespace CalmDown
                 AutoSize = true
             };
 
-            // Live Rolling Telemetry Sparkline
             pnlSparkline = new Panel
             {
                 Location = new Point(370, 48),
@@ -613,7 +793,7 @@ namespace CalmDown
             this.Controls.Add(cardSweet);
             this.Controls.Add(cardBeast);
 
-            // 3. Autonomous Automation Settings Panel
+            // 3. Automation Settings Panel
             pnlAutomation = new Panel
             {
                 Location = new Point(18, 366),
@@ -627,7 +807,7 @@ namespace CalmDown
 
             chkDynamic = new CheckBox
             {
-                Text = "Enable Smart Dynamic Load Governor (Max-Core Aware)",
+                Text = "Enable Smart Dynamic Load Governor (Anti-Flap State Machine)",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(235, 238, 248),
                 Location = new Point(14, 12),
@@ -647,7 +827,7 @@ namespace CalmDown
 
             lblDynamicSub = new Label
             {
-                Text = "Uses per-core tracking with fast-attack & slow-release to prevent single-core gaming choke.\n(<20% Max Core: Ice-Cold  |  25-80%: Sweet-Spot  |  >80%: Beast Turbo)",
+                Text = "Step-by-step scaling: single-core spikes hold Sweet-Spot; Beast requires sustained multi-core load.\n(Slow-release 6s hold eliminates rapid fan oscillation)",
                 Font = new Font("Segoe UI", 8f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(145, 152, 168),
                 Location = new Point(34, 32),
@@ -656,7 +836,7 @@ namespace CalmDown
 
             chkAutoPilot = new CheckBox
             {
-                Text = "Enable Game Auto-Pilot Priority (Direct3D Fullscreen + Process Lock)",
+                Text = "Enable Game Auto-Pilot Priority (Foreground Process & rules.ini)",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(235, 238, 248),
                 Location = new Point(14, 68),
@@ -673,7 +853,7 @@ namespace CalmDown
 
             lblAutoPilotSub = new Label
             {
-                Text = "Auto-detects exclusive 3D games via SHQueryUserNotificationState & locks 3500 MHz.",
+                Text = "Locks Sweet-Spot (3500 MHz) when games or rules.ini matches are detected.",
                 Font = new Font("Segoe UI", 8f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(145, 152, 168),
                 Location = new Point(34, 90),
@@ -739,7 +919,7 @@ namespace CalmDown
             };
             statusLabel = new ToolStripStatusLabel
             {
-                Text = "Ready | Engine: PowrProf P/Invoke | Anti-Cheat Safe (0 Kernel Drivers) | v3.0",
+                Text = "Ready | Engine: PowrProf P/Invoke (~51ms) | User-Space ACPI | v3.0",
                 ForeColor = Color.FromArgb(120, 126, 140),
                 Font = new Font("Segoe UI", 8f, FontStyle.Regular)
             };
@@ -766,9 +946,7 @@ namespace CalmDown
             int w = pnlSparkline.Width;
             int h = pnlSparkline.Height;
 
-            // Subtle border
             ControlPaint.DrawBorder(g, pnlSparkline.ClientRectangle, Color.FromArgb(35, 38, 46), ButtonBorderStyle.Solid);
-
             if (telemetryHistory.Count < 2) return;
 
             PointF[] points = new PointF[telemetryHistory.Count];
@@ -895,28 +1073,34 @@ namespace CalmDown
                     int avgLoad, maxCoreLoad;
                     HardwareMonitor.GetCpuMetrics(out avgLoad, out maxCoreLoad);
 
-                    // Add to rolling sparkline history
                     telemetryHistory.Add(maxCoreLoad);
                     if (telemetryHistory.Count > MaxHistoryPoints) telemetryHistory.RemoveAt(0);
                     pnlSparkline.Invalidate();
 
-                    // Centralized Priority Arbitration:
-                    // 1. Check for Active Games (Direct3D Fullscreen OR Process List)
+                    // Check Active App Rules or Game Detection
                     bool gameRunning = false;
+                    string fgProcess = HardwareMonitor.GetForegroundProcessName();
+
                     if (chkAutoPilot.Checked)
                     {
-                        if (HardwareMonitor.IsD3DFullscreenGameActive())
+                        string ruleMode;
+                        if (!string.IsNullOrEmpty(fgProcess) && ConfigManager.AppRules.TryGetValue(fgProcess, out ruleMode))
                         {
                             gameRunning = true;
                         }
                         else
                         {
-                            foreach (string procName in WatchedProcesses)
+                            // Check running process list for known games
+                            foreach (var kvp in ConfigManager.AppRules)
                             {
-                                if (Process.GetProcessesByName(procName).Length > 0)
+                                if (kvp.Value.Equals("Sweet", StringComparison.OrdinalIgnoreCase) ||
+                                    kvp.Value.Equals("Beast", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    gameRunning = true;
-                                    break;
+                                    if (Process.GetProcessesByName(kvp.Key).Length > 0)
+                                    {
+                                        gameRunning = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -935,32 +1119,21 @@ namespace CalmDown
                         }
                     }
 
-                    // 2. Dynamic Governor (Fast-attack, slow-release)
+                    // Dynamic Governor State Machine
                     if (chkDynamic.Checked && !gameRunning)
                     {
-                        // Heavy Load: Immediate Fast-Attack
-                        if (maxCoreLoad >= 85 || avgLoad >= 75)
+                        var targetMode = stateMachine.Process(avgLoad, maxCoreLoad, false);
+                        switch (targetMode)
                         {
-                            stepDownDwellTicks = 3; // Hold for at least 6s
-                            NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive);
-                        }
-                        // Medium / Gaming Load: Immediate Step-Up
-                        else if (maxCoreLoad >= 25 || avgLoad >= 20)
-                        {
-                            stepDownDwellTicks = 3;
-                            NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
-                        }
-                        // Low Load: Slow-Release Dwell Check
-                        else
-                        {
-                            if (stepDownDwellTicks > 0)
-                            {
-                                stepDownDwellTicks--;
-                            }
-                            else
-                            {
+                            case GovernorMode.BeastTurbo:
+                                NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive);
+                                break;
+                            case GovernorMode.SweetSpot:
+                                NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
+                                break;
+                            case GovernorMode.IceCold:
                                 NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled);
-                            }
+                                break;
                         }
                     }
 
