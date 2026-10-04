@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com/windows)
-[![Binary](https://img.shields.io/badge/CalmDown.exe-26%20KB%20(Native%20Win32)-brightgreen.svg)]()
+[![Binary](https://img.shields.io/badge/CalmDown.exe-33%20KB%20(Native%20Win32)-brightgreen.svg)]()
 [![Tested Hardware](https://img.shields.io/badge/Tested%20On-Acer%20ALG%20(i7--13620H)-orange.svg)]()
 [![Architecture](https://img.shields.io/badge/Architecture-Driver--Free%20User--Space-blueviolet.svg)]()
 
@@ -14,14 +14,15 @@
 
 ## 🚀 What's New in v3.0 (Major Architectural Upgrade)
 
-- ⚡ **Direct Win32 `powrprof.dll` Engine:** Replaced `powercfg.exe` command-line process spawning with direct Win32 P/Invoke (`PowerWriteACValueIndex`, `PowerWriteDCValueIndex`, `PowerSetActiveScheme`). Measured apply latency dropped from **~450 ms down to ~51 ms** with zero child-process overhead.
+- ⚡ **Direct Win32 `powrprof.dll` Engine:** Replaced `powercfg.exe` command-line process spawning with direct Win32 P/Invoke (`PowerWriteACValueIndex`, `PowerWriteDCValueIndex`, `PowerSetActiveScheme`). Measured apply latency dropped from **~450 ms down to ~54 ms** with zero child-process overhead.
 - 🔌 **Dual-Rail AC & DC Synchronization:** Writes both AC (plugged in) and DC (battery) ACPI indices, ensuring power limits remain active whether running on wall power or battery. Reads live indices directly without stale caching.
-- 🎯 **Anti-Flap Max-Core Aware Governor:** Tracks per-core busy times via `NtQuerySystemInformation(8)`. Implements a step-by-step state machine:
+- 🎯 **Deadband Hysteresis & Anti-Flap Max-Core Governor:** Tracks per-core busy times via `NtQuerySystemInformation(8)`. Implements separated step-up ($\ge 30\%$ max / $\ge 22\%$ avg) and step-down ($< 15\%$ max / $< 12\%$ avg) thresholds to eliminate clock-dependent hysteresis flapping:
   - Transient single-core spikes (e.g. Defender scan or browser tab) hold **Sweet-Spot (3500 MHz)**.
-  - **Beast Turbo (Uncapped 4.9 GHz)** is only unlocked on **sustained multi-core workloads** (avg > 70% & max > 85% for 4+ seconds).
+  - **Beast Turbo (Uncapped 4.9 GHz)** requires **sustained multi-core demand** (avg $\ge 70\%$ & max $\ge 85\%$ for 2 consecutive ticks) with a 4s dwell hold.
   - Includes a 6-second slow-release dwell timer to eliminate rapid fan/power oscillations.
-- 🎮 **Per-Process Rules & Game Memory:** Reads `%LOCALAPPDATA%\CalmDown\rules.ini` to map foreground applications directly to profiles (`VALORANT.exe = Sweet`, `Premiere.exe = Beast`, etc.). Restores previous user mode when games exit.
-- 🧪 **Built-in State Machine Verification (`--selftest`):** Includes a CLI self-test suite (`CalmDown.exe --selftest`) that feeds synthetic load traces into the governor and asserts state transitions.
+- 🎮 **Per-Process Rules & Game Memory:** Reads `%LOCALAPPDATA%\CalmDown\rules.ini` to map foreground applications directly to profiles (`VALORANT.exe = Sweet`, `Premiere.exe = Beast`, etc.). Preserves and restores previous user mode when games exit or Auto-Pilot is disabled.
+- 🧪 **Built-in State Machine Verification (`--selftest`):** Includes a CLI self-test suite (`CalmDown.exe --selftest`) with clock-dependent load simulation that feeds synthetic traces and asserts all state transitions.
+- ⏱️ **Real-Time Latency Benchmark (`--bench`):** Measures native Win32 `powrprof` scheme application latency directly with high-resolution `Stopwatch` across 5 sequential ACPI scheme transitions.
 - 📈 **Live GDI Hardware Sparkline:** Integrated a smooth rolling 50-point telemetry graph directly into the Dark UI, visualizing real-time CPU load spikes without sampling baseline jitter.
 - 🛡️ **Driver-Free User-Space Design:** Operates entirely within standard user-space via documented Windows ACPI power APIs, avoiding third-party ring-0 kernel drivers.
 - 💾 **State Persistence & Immediate Stock Backup:** Backs up true factory ACPI indices immediately in `Main` before any profiles apply. Single-instance mutex handles abandoned instances and restores existing windows via Win32 IPC messaging.
@@ -90,8 +91,8 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 | :--- | :--- | :--- | :--- |
 | **Architecture** | Heavy Electron / WPF background suite | Ring-0 kernel-mode driver | **User-space Win32 (`powrprof.dll`)** |
 | **Driver Dependency** | Proprietary services | Custom kernel driver | **0 external drivers (Native Windows APIs)** |
-| **Crash Risk** | Low (bloated) | BSOD risk from unstable offsets | **Zero BSOD risk (ACPI managed)** |
-| **Footprint** | 150MB+ RAM | 10MB - 30MB RAM | **~26 KB executable**, < 0.1% idle CPU |
+| **Crash Risk** | Low (bloated) | System instability / BSOD if offsets fail | **No ring-0 modification (standard ACPI power schemes)** |
+| **Footprint** | 150MB+ RAM | 10MB - 30MB RAM | **~33 KB standalone executable**, < 0.1% idle CPU |
 | **Autonomous** | Manual profiles | Fixed thresholds | **Dynamic Max-Core Governor + rules.ini** |
 
 ---
@@ -102,6 +103,7 @@ CalmDown can be called directly from shortcuts, terminal scripts, or custom game
 
 ```cmd
 CalmDown.exe --selftest  # Run Governor State Machine test suite
+CalmDown.exe --bench     # Benchmark live Win32 PowrProf apply latency (Stopwatch)
 CalmDown.exe --ice       # Activate Ice-Cold Profile (Locked base frequency)
 CalmDown.exe --sweet     # Activate Sweet-Spot Profile (3500 MHz cap)
 CalmDown.exe --beast     # Activate Beast Turbo Profile (Uncapped boost)
@@ -116,7 +118,7 @@ To verify the integrity of the standalone binary:
 
 - **File:** `CalmDown.exe`
 - **SHA-256 Checksum:**  
-  `CC8A6D9C13EE91ECFBDC26FCBA035F357CD3C183AFFFD1E2641029415884070C`
+  `EDBBF76E7AA0EE66BBCD91BAB3E2DAA216EAFF3ADE60C09A74897E9815DBD70D`
 
 You can verify the checksum in PowerShell:
 ```powershell
