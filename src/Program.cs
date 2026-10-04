@@ -128,10 +128,15 @@ namespace CalmDown
 
             try
             {
+                Application.ApplicationExit += (s, e) =>
+                {
+                    NativePower.RestoreOriginalDirect();
+                };
                 Application.Run(new MainForm());
             }
             finally
             {
+                try { NativePower.RestoreOriginalDirect(); } catch { }
                 if (singleInstanceMutex != null)
                 {
                     try { singleInstanceMutex.ReleaseMutex(); } catch { }
@@ -945,10 +950,10 @@ namespace CalmDown
                 {
                     string l = rawLine.Trim();
                     if (string.IsNullOrEmpty(l) || l.StartsWith("#") || l.StartsWith(";")) continue;
-                    string[] p = l.Split('=');
-                    if (p.Length >= 1)
+                    int eq = l.IndexOf('=');
+                    if (eq > 0)
                     {
-                        string k = p[0].Trim();
+                        string k = l.Substring(0, eq).Trim();
                         if (k.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                             k = k.Substring(0, k.Length - 4).Trim();
                         existingKeys.Add(k);
@@ -958,8 +963,8 @@ namespace CalmDown
                 var toAppend = new List<string>();
                 foreach (string def in DefaultGameRules)
                 {
-                    string[] dp = def.Split('=');
-                    string dk = dp[0].Trim();
+                    int deq = def.IndexOf('=');
+                    string dk = (deq > 0) ? def.Substring(0, deq).Trim() : def.Trim();
                     if (!existingKeys.Contains(dk))
                     {
                         toAppend.Add(def);
@@ -981,26 +986,54 @@ namespace CalmDown
             catch { }
         }
 
+        private static DateTime lastRulesModified = DateTime.MinValue;
+
+        public static void ReloadRulesIfChanged()
+        {
+            try
+            {
+                if (!File.Exists(RulesFile)) return;
+                DateTime curMod = File.GetLastWriteTimeUtc(RulesFile);
+                if (curMod != lastRulesModified)
+                {
+                    lastRulesModified = curMod;
+                    LoadRules();
+                }
+            }
+            catch { }
+        }
+
         public static void LoadRules()
         {
             try
             {
                 MigrateRules(ConfigDir);
 
-                AppRules.Clear();
-                foreach (string rawLine in File.ReadAllLines(RulesFile))
+                if (File.Exists(RulesFile))
                 {
-                    string line = rawLine.Trim();
-                    if (string.IsNullOrEmpty(line) || line.StartsWith("#") || line.StartsWith(";")) continue;
-                    string[] parts = line.Split('=');
-                    if (parts.Length == 2)
+                    lastRulesModified = File.GetLastWriteTimeUtc(RulesFile);
+                }
+
+                AppRules.Clear();
+                if (File.Exists(RulesFile))
+                {
+                    foreach (string rawLine in File.ReadAllLines(RulesFile))
                     {
-                        string processKey = parts[0].Trim();
-                        if (processKey.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        string line = rawLine.Trim();
+                        if (string.IsNullOrEmpty(line) || line.StartsWith("#") || line.StartsWith(";")) continue;
+                        int eqIdx = line.IndexOf('=');
+                        if (eqIdx > 0)
                         {
-                            processKey = processKey.Substring(0, processKey.Length - 4).Trim();
+                            string processKey = line.Substring(0, eqIdx).Trim();
+                            if (processKey.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                            {
+                                processKey = processKey.Substring(0, processKey.Length - 4).Trim();
+                            }
+                            string val = line.Substring(eqIdx + 1).Trim();
+                            int commentIdx = val.IndexOfAny(new char[] { '#', ';' });
+                            if (commentIdx >= 0) val = val.Substring(0, commentIdx).Trim();
+                            AppRules[processKey] = val;
                         }
-                        AppRules[processKey] = parts[1].Trim();
                     }
                 }
             }
@@ -1256,10 +1289,15 @@ namespace CalmDown
             {
                 if (!forceWrite)
                 {
-                    uint curB, curF;
-                    if (ReadCurrentIndices(out curB, out curF) && curB == (uint)boostMode && curF == freqMhz)
+                    uint curAcB, curAcF, curDcB, curDcF;
+                    if (ReadAllIndices(out curAcB, out curAcF, out curDcB, out curDcF))
                     {
-                        return true; // Already applied, verified against live ACPI state
+                        bool acMatches = (!writeAC) || (curAcB == (uint)boostMode && curAcF == freqMhz);
+                        bool dcMatches = (!writeDC) || (curDcB == (uint)boostMode && curDcF == freqMhz);
+                        if (acMatches && dcMatches)
+                        {
+                            return true; // Both requested rails already match desired state
+                        }
                     }
                 }
 
@@ -1370,7 +1408,7 @@ namespace CalmDown
 
                 if (total > 0)
                 {
-                    if ((busy * 100) / total > (highestCoreBusy * 100) / highestCoreTotal)
+                    if (busy * highestCoreTotal > highestCoreBusy * total)
                     {
                         highestCoreBusy = busy;
                         highestCoreTotal = total;
@@ -1752,7 +1790,7 @@ namespace CalmDown
             statusStrip.Items.Add(statusLabel);
             this.Controls.Add(statusStrip);
 
-            // Hide to tray on Close [X]
+            // Hide to tray on Close [X], restore original power settings on system shutdown / exit
             this.FormClosing += (s, e) =>
             {
                 if (e.CloseReason == CloseReason.UserClosing)
@@ -1760,6 +1798,10 @@ namespace CalmDown
                     e.Cancel = true;
                     this.Hide();
                     trayIcon.ShowBalloonTip(1200, "CalmDown", "Active in background tray.", ToolTipIcon.Info);
+                }
+                else
+                {
+                    NativePower.RestoreOriginalDirect();
                 }
             };
         }
@@ -1905,6 +1947,9 @@ namespace CalmDown
                     telemetryHistory.Add(cachedMaxCoreLoad);
                     if (telemetryHistory.Count > MaxHistoryPoints) telemetryHistory.RemoveAt(0);
                     pnlSparkline.Invalidate();
+
+                    // Hot-reload rules if rules.ini changed on disk
+                    ConfigManager.ReloadRulesIfChanged();
 
                     // Check Foreground Application against rules.ini
                     string fgProcess = HardwareMonitor.GetForegroundProcessName();

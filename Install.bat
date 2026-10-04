@@ -12,9 +12,12 @@ set "TARGET_DIR=%LOCALAPPDATA%\CalmDown"
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
 echo [1/2] Copying CalmDown.exe to %TARGET_DIR%...
-copy /Y "%~dp0bin\CalmDown.exe" "%TARGET_DIR%\CalmDown.exe" >nul
-if errorlevel 1 (
-    echo [ERROR] Failed to copy CalmDown.exe. Please ensure you extract the ZIP before running.
+if exist "%~dp0bin\CalmDown.exe" (
+    copy /Y "%~dp0bin\CalmDown.exe" "%TARGET_DIR%\CalmDown.exe" >nul
+) else if exist "%~dp0CalmDown.exe" (
+    copy /Y "%~dp0CalmDown.exe" "%TARGET_DIR%\CalmDown.exe" >nul
+) else (
+    echo [ERROR] CalmDown.exe not found in "%~dp0" or "%~dp0bin\".
     pause
     exit /b 1
 )
