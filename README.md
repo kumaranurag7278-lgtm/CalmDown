@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com/windows)
-[![Binary](https://img.shields.io/badge/CalmDown.exe-35%20KB%20(Native%20Win32)-brightgreen.svg)]()
+[![Binary](https://img.shields.io/badge/CalmDown.exe-43%20KB%20(Native%20Win32)-brightgreen.svg)]()
 [![Tested Hardware](https://img.shields.io/badge/Tested%20On-Acer%20ALG%20(i7--13620H)-orange.svg)]()
 [![Architecture](https://img.shields.io/badge/Architecture-Driver--Free%20User--Space-blueviolet.svg)]()
 
@@ -95,7 +95,7 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 | **Architecture** | Heavy Electron / WPF background suite | Ring-0 kernel-mode driver | **User-space Win32 (`powrprof.dll`)** |
 | **Driver Dependency** | Proprietary services | Custom kernel driver | **0 external drivers (Native Windows APIs)** |
 | **Crash Risk** | Low (bloated) | System instability / BSOD if offsets fail | **No ring-0 modification (standard ACPI power schemes)** |
-| **Footprint** | 150MB+ RAM | 10MB - 30MB RAM | **~35 KB standalone executable**, < 0.1% idle CPU |
+| **Footprint** | 150MB+ RAM | 10MB - 30MB RAM | **~43 KB standalone executable** |
 | **Autonomous** | Manual profiles | Fixed thresholds | **Dynamic Max-Core Governor + rules.ini** |
 
 ---
@@ -105,13 +105,24 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 CalmDown can be called directly from shortcuts, terminal scripts, or custom game launchers:
 
 ```cmd
-CalmDown.exe --selftest  # Run Governor State Machine test suite (17 asserts)
+CalmDown.exe --selftest  # Run Governor State Machine test suite (20 asserts)
 CalmDown.exe --bench     # Benchmark live Win32 PowrProf apply latency (Stopwatch)
+CalmDown.exe --diagnose  # Inspect live ACPI subsystem, overlay, and running OEM tools
 CalmDown.exe --ice       # Activate Ice-Cold Profile (Locked base frequency)
 CalmDown.exe --sweet     # Activate Sweet-Spot Profile (3500 MHz cap)
 CalmDown.exe --beast     # Activate Beast Turbo Profile (Uncapped boost)
 CalmDown.exe --restore   # Reset to original factory power configuration
 ```
+
+### 🩺 Subsystem Diagnostics (`--diagnose`)
+
+To inspect your machine's live power configuration, boost state on both AC and DC rails, effective Windows overlay scheme, and check for running OEM control center software without altering any system settings, run:
+
+```cmd
+CalmDown.exe --diagnose
+```
+
+When reporting compatibility questions or opening an issue on GitHub, please run this command and paste the full output into your issue report.
 
 ### ⚡ Verified `--bench` Output (Measured on Intel Core i7-13620H)
 
@@ -138,7 +149,7 @@ To verify the integrity of the standalone binary:
 
 - **File:** `CalmDown.exe`
 - **SHA-256 Checksum:**  
-  `901BAA02A5CCFE464152461A659E79080BFDD654E2F91867FFD4CC55E650C434`
+  `138E2A2D784AC47425105FA6752CBCAE7A91735132C2325E8283FF4A0103143F`
 
 You can verify the checksum in PowerShell:
 ```powershell

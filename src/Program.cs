@@ -78,6 +78,11 @@ namespace CalmDown
                         AttachConsole(-1);
                         Benchmark.Run();
                         return;
+                    case "--diagnose":
+                    case "-d":
+                        AttachConsole(-1);
+                        Diagnostic.Run();
+                        return;
                     case "--ice":
                     case "-i":
                         NativePower.EnsureBackup();
@@ -132,6 +137,196 @@ namespace CalmDown
                     try { singleInstanceMutex.ReleaseMutex(); } catch { }
                     singleInstanceMutex.Dispose();
                 }
+            }
+        }
+    }
+
+    internal static class Diagnostic
+    {
+        [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+        private delegate uint PowerGetEffectiveOverlaySchemeDelegate(out Guid EffectiveOverlayScheme);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true, SetLastError = true)]
+        private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        public static void Run()
+        {
+            Console.WriteLine();
+            Console.WriteLine("=========================================================");
+            Console.WriteLine("   CalmDown Hardware & Power Subsystem Diagnostics");
+            Console.WriteLine("=========================================================");
+
+            // 1. System Overview
+            Console.WriteLine(string.Format("  CalmDown Version   : {0}", "v3.0"));
+            Console.WriteLine(string.Format("  OS Version         : {0}", Environment.OSVersion.VersionString));
+            Console.WriteLine(string.Format("  CPU Name           : {0}", HardwareMonitor.GetProcessorName()));
+            Console.WriteLine(string.Format("  Logical Processors : {0}", Environment.ProcessorCount));
+            Console.WriteLine();
+
+            // 2. Active Power Scheme & Friendly Name
+            Guid activeScheme;
+            if (!NativePower.GetActiveSchemeGuid(out activeScheme))
+            {
+                Console.WriteLine("  Active Power Scheme: read failed (unable to get GUID)");
+            }
+            else
+            {
+                string friendlyName;
+                uint nameErr;
+                if (NativePower.GetActiveSchemeFriendlyName(out friendlyName, out nameErr))
+                {
+                    Console.WriteLine(string.Format("  Active Scheme GUID : {0}", activeScheme));
+                    Console.WriteLine(string.Format("  Active Scheme Name : {0}", friendlyName));
+                }
+                else
+                {
+                    Console.WriteLine(string.Format("  Active Scheme GUID : {0}", activeScheme));
+                    Console.WriteLine(string.Format("  Active Scheme Name : read failed (code {0})", nameErr));
+                }
+                Console.WriteLine();
+
+                // 3. Active Power Source & Rail Values
+                string powerSource;
+                switch (SystemInformation.PowerStatus.PowerLineStatus)
+                {
+                    case PowerLineStatus.Online:
+                        powerSource = "AC (Wall Power / Plugged in)";
+                        break;
+                    case PowerLineStatus.Offline:
+                        powerSource = "DC (Battery)";
+                        break;
+                    default:
+                        powerSource = "Unknown";
+                        break;
+                }
+                Console.WriteLine(string.Format("  Active Power Source: {0}", powerSource));
+
+                // Read AC indices
+                uint acBoost, acFreq;
+                uint errAcB = NativePower.ReadSpecificIndex(activeScheme, true, NativePower.GuidBoostMode, out acBoost);
+                uint errAcF = NativePower.ReadSpecificIndex(activeScheme, true, NativePower.GuidFreqMax, out acFreq);
+
+                string acBoostStr = (errAcB == 0) ? string.Format("{0} ({1})", acBoost, (PerfBoostMode)acBoost) : ("read failed (code " + errAcB + ")");
+                string acFreqStr = (errAcF == 0) ? (acFreq == 0 ? "0 (Uncapped)" : acFreq + " MHz") : ("read failed (code " + errAcF + ")");
+                Console.WriteLine(string.Format("  AC Boost Mode      : {0}", acBoostStr));
+                Console.WriteLine(string.Format("  AC Max Frequency   : {0}", acFreqStr));
+
+                // Read DC indices
+                uint dcBoost, dcFreq;
+                uint errDcB = NativePower.ReadSpecificIndex(activeScheme, false, NativePower.GuidBoostMode, out dcBoost);
+                uint errDcF = NativePower.ReadSpecificIndex(activeScheme, false, NativePower.GuidFreqMax, out dcFreq);
+
+                string dcBoostStr = (errDcB == 0) ? string.Format("{0} ({1})", dcBoost, (PerfBoostMode)dcBoost) : ("read failed (code " + errDcB + ")");
+                string dcFreqStr = (errDcF == 0) ? (dcFreq == 0 ? "0 (Uncapped)" : dcFreq + " MHz") : ("read failed (code " + errDcF + ")");
+                Console.WriteLine(string.Format("  DC Boost Mode      : {0}", dcBoostStr));
+                Console.WriteLine(string.Format("  DC Max Frequency   : {0}", dcFreqStr));
+                Console.WriteLine();
+
+                // 4. Windows Power Mode Overlay
+                PrintOverlayScheme();
+            }
+
+            Console.WriteLine();
+            // 5. OEM Control Software Detection
+            PrintOemTools();
+
+            Console.WriteLine("=========================================================");
+            Console.WriteLine();
+        }
+
+        private static void PrintOverlayScheme()
+        {
+            IntPtr hPowrProf = GetModuleHandle("powrprof.dll");
+            if (hPowrProf == IntPtr.Zero)
+            {
+                Console.WriteLine("  Overlay Scheme     : n/a");
+                return;
+            }
+
+            IntPtr pFunc = GetProcAddress(hPowrProf, "PowerGetEffectiveOverlayScheme");
+            if (pFunc == IntPtr.Zero)
+            {
+                Console.WriteLine("  Overlay Scheme     : n/a");
+                return;
+            }
+
+            try
+            {
+                var func = (PowerGetEffectiveOverlaySchemeDelegate)Marshal.GetDelegateForFunctionPointer(pFunc, typeof(PowerGetEffectiveOverlaySchemeDelegate));
+                Guid overlayGuid;
+                uint ret = func(out overlayGuid);
+                if (ret == 0)
+                {
+                    string overlayName = GetOverlayFriendlyName(overlayGuid);
+                    Console.WriteLine(string.Format("  Overlay Scheme     : {0} ({1})", overlayGuid, overlayName));
+                }
+                else
+                {
+                    Console.WriteLine(string.Format("  Overlay Scheme     : read failed (code {0})", ret));
+                }
+            }
+            catch
+            {
+                Console.WriteLine("  Overlay Scheme     : n/a");
+            }
+        }
+
+        private static string GetOverlayFriendlyName(Guid g)
+        {
+            string s = g.ToString().ToLowerInvariant();
+            if (s == "00000000-0000-0000-0000-000000000000") return "None / Default";
+            if (s == "961cc777-2547-4f93-819f-090c433b4b80") return "Best Power Efficiency";
+            if (s == "3af9b8d9-7c97-431d-ad7e-343427116b39") return "Balanced (Recommended)";
+            if (s == "ded574b5-45a0-4f42-8737-46345c09c238") return "Best Performance";
+            return "Custom Overlay";
+        }
+
+        private static void PrintOemTools()
+        {
+            string[] knownOem = new string[]
+            {
+                "NitroSense", "PredatorSense", "AcerSense", "Vantage", "LenovoVantage",
+                "LegionZone", "ArmouryCrate", "ArmouryCrate.Service", "OmenCommandCenter",
+                "OMENCap", "MSI Center", "Dragon Center"
+            };
+
+            var runningTools = new List<string>();
+            try
+            {
+                Process[] processes = Process.GetProcesses();
+                foreach (Process p in processes)
+                {
+                    try
+                    {
+                        string pName = p.ProcessName;
+                        foreach (string oem in knownOem)
+                        {
+                            string oemNorm = oem.Replace(" ", "");
+                            if (pName.Equals(oem, StringComparison.OrdinalIgnoreCase) ||
+                                pName.Equals(oemNorm, StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (!runningTools.Contains(oem))
+                                {
+                                    runningTools.Add(oem);
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
+            if (runningTools.Count > 0)
+            {
+                Console.WriteLine(string.Format("  OEM Tools Running  : {0}", string.Join(", ", runningTools.ToArray())));
+            }
+            else
+            {
+                Console.WriteLine("  OEM Tools Running  : None detected");
             }
         }
     }
