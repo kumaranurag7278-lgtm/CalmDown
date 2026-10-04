@@ -86,6 +86,10 @@ Modern high-performance processors (like the **Intel Core i7-13620H, i5-13420H, 
 
 > *Note: In non-gaming everyday workloads (web browsing, studying, YouTube), CPU temperatures sit comfortably at **~60°C–65°C** with near-silent fans.*
 
+> 📌 **Benchmark Conditions & Overlay Note:**  
+> - The published benchmark above was tested with the active Windows 11 Power Mode overlay set to **Best Power Efficiency** (`961cc777-2547-4f9d-8174-7d86181b8a7a`).  
+> - The published metrics represent **Ice-Cold Mode (2.4 GHz base clock)** only. Sweet-Spot profile (3500 MHz cap) benchmark telemetry is currently pending further testing.
+
 ---
 
 ## 🥊 CalmDown vs Traditional Tools
@@ -119,10 +123,12 @@ CalmDown.exe --restore   # Reset to original factory power configuration
 To inspect your machine's live power configuration, boost state on both AC and DC rails, effective Windows overlay scheme, and check for running OEM control center software without altering any system settings, run:
 
 ```cmd
-CalmDown.exe --diagnose
+start /wait CalmDown.exe --diagnose
 ```
+*(In PowerShell: `Start-Process .\CalmDown.exe -ArgumentList '--diagnose' -Wait -NoNewWindow`)*
 
-When reporting compatibility questions or opening an issue on GitHub, please run this command and paste the full output into your issue report.
+> [!TIP]
+> **Clipboard & Log File Auto-Capture:** Running `--diagnose` automatically copies the complete diagnostic report directly to your Windows clipboard and saves it to `%LOCALAPPDATA%\CalmDown\diagnose.txt`. If your command prompt closes or you are reporting an issue, you can immediately press **Ctrl+V** in your GitHub issue or attach `diagnose.txt` without fighting console redirection!
 
 ### ⚡ Verified `--bench` Output (Measured on Intel Core i7-13620H)
 
@@ -149,7 +155,7 @@ To verify the integrity of the standalone binary:
 
 - **File:** `CalmDown.exe`
 - **SHA-256 Checksum:**  
-  `9CD819CAE9D929CAED35D5EF700F136FF293AC3CE0CD47B3792381A7F58EED91`
+  `5ECDF136851B2B97F95FC11F943CDA8711A2584173D2F3166E12D8859FEE7386`
 
 You can verify the checksum in PowerShell:
 ```powershell

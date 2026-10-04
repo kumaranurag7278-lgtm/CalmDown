@@ -152,25 +152,33 @@ namespace CalmDown
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr GetModuleHandle(string lpModuleName);
 
+        private static void PrintDiagLine(List<string> buffer, string text)
+        {
+            Console.WriteLine(text);
+            if (buffer != null) buffer.Add(text);
+        }
+
         public static void Run()
         {
-            Console.WriteLine();
-            Console.WriteLine("=========================================================");
-            Console.WriteLine("   CalmDown Hardware & Power Subsystem Diagnostics");
-            Console.WriteLine("=========================================================");
+            var buffer = new List<string>();
+
+            PrintDiagLine(buffer, "");
+            PrintDiagLine(buffer, "=========================================================");
+            PrintDiagLine(buffer, "   CalmDown Hardware & Power Subsystem Diagnostics");
+            PrintDiagLine(buffer, "=========================================================");
 
             // 1. System Overview
-            Console.WriteLine(string.Format("  CalmDown Version   : {0}", "v3.0"));
-            Console.WriteLine(string.Format("  OS Version         : {0}", GetOSVersionDescription()));
-            Console.WriteLine(string.Format("  CPU Name           : {0}", HardwareMonitor.GetProcessorName()));
-            Console.WriteLine(string.Format("  Logical Processors : {0}", Environment.ProcessorCount));
-            Console.WriteLine();
+            PrintDiagLine(buffer, string.Format("  CalmDown Version   : {0}", "v3.0"));
+            PrintDiagLine(buffer, string.Format("  OS Version         : {0}", GetOSVersionDescription()));
+            PrintDiagLine(buffer, string.Format("  CPU Name           : {0}", HardwareMonitor.GetProcessorName()));
+            PrintDiagLine(buffer, string.Format("  Logical Processors : {0}", Environment.ProcessorCount));
+            PrintDiagLine(buffer, "");
 
             // 2. Active Power Scheme & Friendly Name
             Guid activeScheme;
             if (!NativePower.GetActiveSchemeGuid(out activeScheme))
             {
-                Console.WriteLine("  Active Power Scheme: read failed (unable to get GUID)");
+                PrintDiagLine(buffer, "  Active Power Scheme: read failed (unable to get GUID)");
             }
             else
             {
@@ -178,15 +186,15 @@ namespace CalmDown
                 uint nameErr;
                 if (NativePower.GetActiveSchemeFriendlyName(out friendlyName, out nameErr))
                 {
-                    Console.WriteLine(string.Format("  Active Scheme GUID : {0}", activeScheme));
-                    Console.WriteLine(string.Format("  Active Scheme Name : {0}", friendlyName));
+                    PrintDiagLine(buffer, string.Format("  Active Scheme GUID : {0}", activeScheme));
+                    PrintDiagLine(buffer, string.Format("  Active Scheme Name : {0}", friendlyName));
                 }
                 else
                 {
-                    Console.WriteLine(string.Format("  Active Scheme GUID : {0}", activeScheme));
-                    Console.WriteLine(string.Format("  Active Scheme Name : read failed (code {0})", nameErr));
+                    PrintDiagLine(buffer, string.Format("  Active Scheme GUID : {0}", activeScheme));
+                    PrintDiagLine(buffer, string.Format("  Active Scheme Name : read failed (code {0})", nameErr));
                 }
-                Console.WriteLine();
+                PrintDiagLine(buffer, "");
 
                 // 3. Active Power Source & Rail Values
                 string powerSource;
@@ -202,7 +210,7 @@ namespace CalmDown
                         powerSource = "Unknown";
                         break;
                 }
-                Console.WriteLine(string.Format("  Active Power Source: {0}", powerSource));
+                PrintDiagLine(buffer, string.Format("  Active Power Source: {0}", powerSource));
 
                 // Read AC indices
                 uint acBoost, acFreq;
@@ -211,8 +219,8 @@ namespace CalmDown
 
                 string acBoostStr = (errAcB == 0) ? string.Format("{0} ({1})", acBoost, (PerfBoostMode)acBoost) : ("read failed (code " + errAcB + ")");
                 string acFreqStr = (errAcF == 0) ? (acFreq == 0 ? "0 (Uncapped)" : acFreq + " MHz") : ("read failed (code " + errAcF + ")");
-                Console.WriteLine(string.Format("  AC Boost Mode      : {0}", acBoostStr));
-                Console.WriteLine(string.Format("  AC Max Frequency   : {0}", acFreqStr));
+                PrintDiagLine(buffer, string.Format("  AC Boost Mode      : {0}", acBoostStr));
+                PrintDiagLine(buffer, string.Format("  AC Max Frequency   : {0}", acFreqStr));
 
                 // Read DC indices
                 uint dcBoost, dcFreq;
@@ -221,35 +229,56 @@ namespace CalmDown
 
                 string dcBoostStr = (errDcB == 0) ? string.Format("{0} ({1})", dcBoost, (PerfBoostMode)dcBoost) : ("read failed (code " + errDcB + ")");
                 string dcFreqStr = (errDcF == 0) ? (dcFreq == 0 ? "0 (Uncapped)" : dcFreq + " MHz") : ("read failed (code " + errDcF + ")");
-                Console.WriteLine(string.Format("  DC Boost Mode      : {0}", dcBoostStr));
-                Console.WriteLine(string.Format("  DC Max Frequency   : {0}", dcFreqStr));
-                Console.WriteLine();
+                PrintDiagLine(buffer, string.Format("  DC Boost Mode      : {0}", dcBoostStr));
+                PrintDiagLine(buffer, string.Format("  DC Max Frequency   : {0}", dcFreqStr));
+                PrintDiagLine(buffer, "");
 
                 // 4. Windows Power Mode Overlay
-                PrintOverlayScheme();
+                PrintOverlayScheme(buffer);
             }
 
-            Console.WriteLine();
+            PrintDiagLine(buffer, "");
             // 5. OEM Control Software Detection
-            PrintOemTools();
+            PrintOemTools(buffer);
+
+            PrintDiagLine(buffer, "=========================================================");
+
+            // Save report to %LOCALAPPDATA%\CalmDown\diagnose.txt and copy to clipboard
+            string reportText = string.Join("\r\n", buffer.ToArray()) + "\r\n";
+            try
+            {
+                string diagDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown");
+                if (!Directory.Exists(diagDir)) Directory.CreateDirectory(diagDir);
+                string diagPath = Path.Combine(diagDir, "diagnose.txt");
+                File.WriteAllText(diagPath, reportText);
+                Console.WriteLine(string.Format("  Report saved to    : {0}", diagPath));
+            }
+            catch { }
+
+            try
+            {
+                Clipboard.SetText(reportText);
+                Console.WriteLine("  Clipboard          : Copied (ready to paste into issue with Ctrl+V)");
+            }
+            catch { }
 
             Console.WriteLine("=========================================================");
             Console.WriteLine();
         }
 
-        private static void PrintOverlayScheme()
+        private static void PrintOverlayScheme(List<string> buffer)
         {
             IntPtr hPowrProf = GetModuleHandle("powrprof.dll");
             if (hPowrProf == IntPtr.Zero)
             {
-                Console.WriteLine("  Overlay Scheme     : n/a");
+                PrintDiagLine(buffer, "  Overlay Scheme     : n/a");
                 return;
             }
 
             IntPtr pFunc = GetProcAddress(hPowrProf, "PowerGetEffectiveOverlayScheme");
             if (pFunc == IntPtr.Zero)
             {
-                Console.WriteLine("  Overlay Scheme     : n/a");
+                PrintDiagLine(buffer, "  Overlay Scheme     : n/a");
                 return;
             }
 
@@ -263,21 +292,21 @@ namespace CalmDown
                     string overlayName = GetOverlayFriendlyName(overlayGuid);
                     if (overlayName.StartsWith("Unknown overlay", StringComparison.OrdinalIgnoreCase))
                     {
-                        Console.WriteLine(string.Format("  Overlay Scheme     : {0}", overlayName));
+                        PrintDiagLine(buffer, string.Format("  Overlay Scheme     : {0}", overlayName));
                     }
                     else
                     {
-                        Console.WriteLine(string.Format("  Overlay Scheme     : {0} ({1})", overlayGuid, overlayName));
+                        PrintDiagLine(buffer, string.Format("  Overlay Scheme     : {0} ({1})", overlayGuid, overlayName));
                     }
                 }
                 else
                 {
-                    Console.WriteLine(string.Format("  Overlay Scheme     : read failed (code {0})", ret));
+                    PrintDiagLine(buffer, string.Format("  Overlay Scheme     : read failed (code {0})", ret));
                 }
             }
             catch
             {
-                Console.WriteLine("  Overlay Scheme     : n/a");
+                PrintDiagLine(buffer, "  Overlay Scheme     : n/a");
             }
         }
 
@@ -347,7 +376,7 @@ namespace CalmDown
             }
         }
 
-        private static void PrintOemTools()
+        private static void PrintOemTools(List<string> buffer)
         {
             string[] knownOem = new string[]
             {
@@ -385,11 +414,11 @@ namespace CalmDown
 
             if (runningTools.Count > 0)
             {
-                Console.WriteLine(string.Format("  OEM Tools Running  : {0}", string.Join(", ", runningTools.ToArray())));
+                PrintDiagLine(buffer, string.Format("  OEM Tools Running  : {0}", string.Join(", ", runningTools.ToArray())));
             }
             else
             {
-                Console.WriteLine("  OEM Tools Running  : None detected");
+                PrintDiagLine(buffer, "  OEM Tools Running  : None detected");
             }
         }
     }
