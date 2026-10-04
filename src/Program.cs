@@ -52,11 +52,20 @@ namespace CalmDown
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
             AppDomain.CurrentDomain.UnhandledException += (s, e) => {
-                try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown", "crash.log"), e.ExceptionObject.ToString()); } catch { }
+                try {
+                    string logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown", "crash.log");
+                    File.WriteAllText(logPath, e.ExceptionObject.ToString());
+                } catch { }
             };
             Application.ThreadException += (s, e) => {
-                try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown", "crash.log"), e.Exception.ToString()); } catch { }
+                try {
+                    string logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown", "crash.log");
+                    File.WriteAllText(logPath, e.Exception.ToString());
+                } catch { }
             };
+
+            // Immediately ensure original stock power settings are backed up before any mode runs
+            NativePower.EnsureBackup();
 
             // CLI flags handling
             if (args != null && args.Length > 0)
@@ -70,15 +79,15 @@ namespace CalmDown
                         return;
                     case "--ice":
                     case "-i":
-                        NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled, true, false);
+                        NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled, true, true);
                         return;
                     case "--sweet":
                     case "-s":
-                        NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true, false);
+                        NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true, true);
                         return;
                     case "--beast":
                     case "-b":
-                        NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive, true, false);
+                        NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive, true, true);
                         return;
                     case "--restore":
                     case "-r":
@@ -325,8 +334,7 @@ namespace CalmDown
                 if (!Directory.Exists(ConfigDir)) Directory.CreateDirectory(ConfigDir);
                 if (!File.Exists(RulesFile))
                 {
-                    // Create default rules file
-                    string defaultRules = "# CalmDown Per-Process Rules (app_name = Ice / Sweet / Beast)\r\n" +
+                    string defaultRules = "# CalmDown Per-Process Rules (process_name = Sweet / Beast / Ice)\r\n" +
                                           "VALORANT = Sweet\r\n" +
                                           "cs2 = Sweet\r\n" +
                                           "GTA5 = Sweet\r\n" +
@@ -362,7 +370,6 @@ namespace CalmDown
 
         private static readonly object powerSyncLock = new object();
 
-        // ACPI Guids from Windows PowrProf
         private static Guid SubGroupProcessor = new Guid("54533251-82be-4824-96c1-47b60b740d00");
         private static Guid GuidBoostMode = new Guid("be337238-0d82-4146-a960-4f3749d470c7");
         private static Guid GuidFreqMax = new Guid("75b0ae3f-bce0-45a7-8c89-c9611c25e100");
@@ -372,6 +379,9 @@ namespace CalmDown
 
         [DllImport("powrprof.dll")]
         private static extern uint PowerReadACValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, out uint AcValueIndex);
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerReadDCValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, out uint DcValueIndex);
 
         [DllImport("powrprof.dll")]
         private static extern uint PowerWriteACValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, uint AcValueIndex);
@@ -388,9 +398,6 @@ namespace CalmDown
         private static readonly string BackupPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "CalmDown", "original_settings.txt");
-
-        private static uint cachedFreq = 999999;
-        private static uint cachedBoost = 999999;
 
         public static bool GetActiveSchemeGuid(out Guid activeScheme)
         {
@@ -418,8 +425,17 @@ namespace CalmDown
             Guid scheme;
             if (!GetActiveSchemeGuid(out scheme)) return false;
 
-            PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, out boostMode);
-            PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, out maxFreqMhz);
+            bool onBattery = (SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline);
+            if (onBattery)
+            {
+                PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, out boostMode);
+                PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, out maxFreqMhz);
+            }
+            else
+            {
+                PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, out boostMode);
+                PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, out maxFreqMhz);
+            }
             return true;
         }
 
@@ -431,11 +447,17 @@ namespace CalmDown
                 string dir = Path.GetDirectoryName(BackupPath);
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
 
-                uint b, f;
-                if (ReadCurrentIndices(out b, out f))
-                {
-                    File.WriteAllText(BackupPath, string.Format("{0},{1}", b, f));
-                }
+                Guid scheme;
+                if (!GetActiveSchemeGuid(out scheme)) return;
+
+                uint acBoost, acFreq, dcBoost, dcFreq;
+                PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, out acBoost);
+                PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, out acFreq);
+                PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, out dcBoost);
+                PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, out dcFreq);
+
+                // Save: AC_Boost, AC_Freq, DC_Boost, DC_Freq
+                File.WriteAllText(BackupPath, string.Format("{0},{1},{2},{3}", acBoost, acFreq, dcBoost, dcFreq));
             }
             catch { }
         }
@@ -448,22 +470,35 @@ namespace CalmDown
                 string[] parts = File.ReadAllText(BackupPath).Trim().Split(',');
                 if (parts.Length < 2) return false;
 
-                uint boost = uint.Parse(parts[0]);
-                uint freq = uint.Parse(parts[1]);
-                cachedFreq = 999999;
-                cachedBoost = 999999;
-                return ApplyModeDirect(freq, (PerfBoostMode)boost, true, true);
+                uint acBoost = uint.Parse(parts[0]);
+                uint acFreq = uint.Parse(parts[1]);
+                uint dcBoost = parts.Length >= 4 ? uint.Parse(parts[2]) : acBoost;
+                uint dcFreq = parts.Length >= 4 ? uint.Parse(parts[3]) : acFreq;
+
+                lock (powerSyncLock)
+                {
+                    Guid scheme;
+                    if (!GetActiveSchemeGuid(out scheme)) return false;
+
+                    PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, acFreq);
+                    PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, acBoost);
+                    PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, dcFreq);
+                    PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, dcBoost);
+                    PowerSetActiveScheme(IntPtr.Zero, ref scheme);
+                    return true;
+                }
             }
             catch { return false; }
         }
 
-        public static bool ApplyModeDirect(uint freqMhz, PerfBoostMode boostMode, bool writeAC = true, bool writeDC = false)
+        public static bool ApplyModeDirect(uint freqMhz, PerfBoostMode boostMode, bool writeAC = true, bool writeDC = true)
         {
             lock (powerSyncLock)
             {
-                if (cachedFreq == freqMhz && cachedBoost == (uint)boostMode)
+                uint curB, curF;
+                if (ReadCurrentIndices(out curB, out curF) && curB == (uint)boostMode && curF == freqMhz)
                 {
-                    return true;
+                    return true; // Already applied, verified against live ACPI state
                 }
 
                 EnsureBackup();
@@ -492,8 +527,6 @@ namespace CalmDown
                 if (ok)
                 {
                     PowerSetActiveScheme(IntPtr.Zero, ref scheme);
-                    cachedFreq = freqMhz;
-                    cachedBoost = (uint)boostMode;
                 }
                 return ok;
             }
@@ -668,6 +701,9 @@ namespace CalmDown
         private List<int> telemetryHistory = new List<int>();
         private const int MaxHistoryPoints = 50;
 
+        private int cachedAvgLoad = 0;
+        private int cachedMaxCoreLoad = 0;
+        private GovernorMode previousUserMode = GovernorMode.IceCold;
         private bool isGameActive = false;
 
         public MainForm()
@@ -731,7 +767,7 @@ namespace CalmDown
 
             lblAcpiTarget = new Label
             {
-                Text = "Engine: Native powrprof.dll Win32 P/Invoke | Driver-Free User Space",
+                Text = "Engine: Native powrprof.dll Win32 P/Invoke | Driver-Free User-Space",
                 Font = new Font("Consolas", 7.8f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(0, 200, 83),
                 Location = new Point(15, 30),
@@ -768,7 +804,7 @@ namespace CalmDown
                 new Point(18, 116),
                 Color.FromArgb(0, 168, 255),
                 out lblIceTag,
-                () => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled)
+                () => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled, GovernorMode.IceCold)
             );
 
             cardSweet = CreateProfileCard(
@@ -777,7 +813,7 @@ namespace CalmDown
                 new Point(18, 196),
                 Color.FromArgb(0, 200, 83),
                 out lblSweetTag,
-                () => SetManualMode(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive)
+                () => SetManualMode(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, GovernorMode.SweetSpot)
             );
 
             cardBeast = CreateProfileCard(
@@ -786,7 +822,7 @@ namespace CalmDown
                 new Point(18, 276),
                 Color.FromArgb(255, 82, 82),
                 out lblBeastTag,
-                () => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive)
+                () => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive, GovernorMode.BeastTurbo)
             );
 
             this.Controls.Add(cardIce);
@@ -820,9 +856,7 @@ namespace CalmDown
                 ConfigManager.DynamicGovernor = chkDynamic.Checked;
                 ConfigManager.Save();
                 if (trayDynamicItem != null) trayDynamicItem.Checked = chkDynamic.Checked;
-                int a, m;
-                HardwareMonitor.GetCpuMetrics(out a, out m);
-                RefreshStatus(a, m);
+                RefreshStatus(cachedAvgLoad, cachedMaxCoreLoad);
             };
 
             lblDynamicSub = new Label
@@ -849,6 +883,11 @@ namespace CalmDown
                 ConfigManager.GameAutoPilot = chkAutoPilot.Checked;
                 ConfigManager.Save();
                 if (trayAutoPilotItem != null) trayAutoPilotItem.Checked = chkAutoPilot.Checked;
+                if (!chkAutoPilot.Checked && isGameActive)
+                {
+                    isGameActive = false;
+                }
+                RefreshStatus(cachedAvgLoad, cachedMaxCoreLoad);
             };
 
             lblAutoPilotSub = new Label
@@ -885,9 +924,7 @@ namespace CalmDown
                 if (NativePower.RestoreOriginalDirect())
                 {
                     MessageBox.Show("Stock ACPI power scheme indices successfully restored.", "CalmDown", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    int a, m;
-                    HardwareMonitor.GetCpuMetrics(out a, out m);
-                    RefreshStatus(a, m);
+                    RefreshStatus(cachedAvgLoad, cachedMaxCoreLoad);
                 }
             };
             this.Controls.Add(btnRestore);
@@ -1032,9 +1069,9 @@ namespace CalmDown
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("CalmDown Hardware Governor v3.0", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
             trayMenu.Items.Add("-");
-            trayMenu.Items.Add("Ice-Cold Profile (~2.4 GHz)", null, (s, e) => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled));
-            trayMenu.Items.Add("Sweet-Spot Profile (3500 MHz)", null, (s, e) => SetManualMode(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive));
-            trayMenu.Items.Add("Beast Turbo Profile (Uncapped)", null, (s, e) => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive));
+            trayMenu.Items.Add("Ice-Cold Profile (~2.4 GHz)", null, (s, e) => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled, GovernorMode.IceCold));
+            trayMenu.Items.Add("Sweet-Spot Profile (3500 MHz)", null, (s, e) => SetManualMode(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, GovernorMode.SweetSpot));
+            trayMenu.Items.Add("Beast Turbo Profile (Uncapped)", null, (s, e) => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive, GovernorMode.BeastTurbo));
             trayMenu.Items.Add("-");
 
             trayDynamicItem = new ToolStripMenuItem("Smart Dynamic Governor", null, (s, e) =>
@@ -1051,7 +1088,11 @@ namespace CalmDown
 
             trayMenu.Items.Add("-");
             trayMenu.Items.Add("Open CalmDown", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
-            trayMenu.Items.Add("Exit", null, (s, e) => { trayIcon.Visible = false; Application.Exit(); });
+            trayMenu.Items.Add("Exit CalmDown", null, (s, e) => {
+                trayIcon.Visible = false;
+                NativePower.RestoreOriginalDirect();
+                Application.Exit();
+            });
 
             trayIcon = new NotifyIcon
             {
@@ -1070,10 +1111,9 @@ namespace CalmDown
             {
                 try
                 {
-                    int avgLoad, maxCoreLoad;
-                    HardwareMonitor.GetCpuMetrics(out avgLoad, out maxCoreLoad);
+                    HardwareMonitor.GetCpuMetrics(out cachedAvgLoad, out cachedMaxCoreLoad);
 
-                    telemetryHistory.Add(maxCoreLoad);
+                    telemetryHistory.Add(cachedMaxCoreLoad);
                     if (telemetryHistory.Count > MaxHistoryPoints) telemetryHistory.RemoveAt(0);
                     pnlSparkline.Invalidate();
 
@@ -1090,16 +1130,23 @@ namespace CalmDown
                         }
                         else
                         {
-                            // Check running process list for known games
                             foreach (var kvp in ConfigManager.AppRules)
                             {
                                 if (kvp.Value.Equals("Sweet", StringComparison.OrdinalIgnoreCase) ||
                                     kvp.Value.Equals("Beast", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    if (Process.GetProcessesByName(kvp.Key).Length > 0)
+                                    Process[] procs = Process.GetProcessesByName(kvp.Key);
+                                    try
                                     {
-                                        gameRunning = true;
-                                        break;
+                                        if (procs.Length > 0)
+                                        {
+                                            gameRunning = true;
+                                            break;
+                                        }
+                                    }
+                                    finally
+                                    {
+                                        foreach (var p in procs) { try { p.Dispose(); } catch { } }
                                     }
                                 }
                             }
@@ -1108,21 +1155,34 @@ namespace CalmDown
                         if (gameRunning && !isGameActive)
                         {
                             isGameActive = true;
+                            previousUserMode = stateMachine.CurrentMode;
                             NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
                             trayIcon.ShowBalloonTip(1800, "Game Detected", "Locked Sweet-Spot Profile (3500 MHz) for consistent frametimes.", ToolTipIcon.Info);
                         }
                         else if (!gameRunning && isGameActive)
                         {
                             isGameActive = false;
-                            NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled);
-                            trayIcon.ShowBalloonTip(1800, "Game Exited", "Reverted to Ice-Cold Profile (~2.4 GHz).", ToolTipIcon.Info);
+                            // Restore previous mode
+                            switch (previousUserMode)
+                            {
+                                case GovernorMode.BeastTurbo:
+                                    NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive);
+                                    break;
+                                case GovernorMode.SweetSpot:
+                                    NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
+                                    break;
+                                default:
+                                    NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled);
+                                    break;
+                            }
+                            trayIcon.ShowBalloonTip(1800, "Game Exited", "Restored previous power profile.", ToolTipIcon.Info);
                         }
                     }
 
                     // Dynamic Governor State Machine
                     if (chkDynamic.Checked && !gameRunning)
                     {
-                        var targetMode = stateMachine.Process(avgLoad, maxCoreLoad, false);
+                        var targetMode = stateMachine.Process(cachedAvgLoad, cachedMaxCoreLoad, false);
                         switch (targetMode)
                         {
                             case GovernorMode.BeastTurbo:
@@ -1137,29 +1197,32 @@ namespace CalmDown
                         }
                     }
 
-                    RefreshStatus(avgLoad, maxCoreLoad);
+                    RefreshStatus(cachedAvgLoad, cachedMaxCoreLoad);
                 }
                 catch (Exception ex)
                 {
-                    try { File.AppendAllText("error.log", ex.ToString() + "\n"); } catch { }
+                    try {
+                        string logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown", "error.log");
+                        File.AppendAllText(logPath, ex.ToString() + "\n");
+                    } catch { }
                 }
             };
             backgroundTimer.Start();
         }
 
-        private void SetManualMode(uint freq, PerfBoostMode boost)
+        private void SetManualMode(uint freq, PerfBoostMode boost, GovernorMode targetMode)
         {
             if (chkDynamic.Checked)
             {
                 chkDynamic.Checked = false; // Disable dynamic governor so manual selection holds
             }
 
+            previousUserMode = targetMode;
+
             if (NativePower.ApplyModeDirect(freq, boost))
             {
                 SystemSounds.Asterisk.Play();
-                int a, m;
-                HardwareMonitor.GetCpuMetrics(out a, out m);
-                RefreshStatus(a, m);
+                RefreshStatus(cachedAvgLoad, cachedMaxCoreLoad);
             }
         }
 

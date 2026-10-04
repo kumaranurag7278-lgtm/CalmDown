@@ -6,19 +6,20 @@ echo ========================================================
 echo   CalmDown - Uninstaller
 echo ========================================================
 echo.
-echo Restoring stock Windows power settings...
 
-powercfg /setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PROCFREQMAX 0 >nul 2>&1
-powercfg /setdcvalueindex SCHEME_CURRENT SUB_PROCESSOR PROCFREQMAX 0 >nul 2>&1
-powercfg /setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 2 >nul 2>&1
-powercfg /setdcvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE 2 >nul 2>&1
-powercfg /setactive SCHEME_CURRENT >nul 2>&1
-
-echo Removing application files...
 set "TARGET_DIR=%LOCALAPPDATA%\CalmDown"
+
+echo [1/3] Restoring original factory power settings...
+if exist "%TARGET_DIR%\CalmDown.exe" (
+    "%TARGET_DIR%\CalmDown.exe" --restore
+)
+
+echo [2/3] Terminating running CalmDown process...
+taskkill /F /IM CalmDown.exe >nul 2>&1
+
+echo [3/3] Removing application files and Desktop shortcut...
 if exist "%TARGET_DIR%" rmdir /S /Q "%TARGET_DIR%"
 
-echo Removing Desktop shortcut...
 powershell.exe -NoProfile -Command ^
     "$desktop = [Environment]::GetFolderPath('Desktop'); " ^
     "$lnk = Join-Path $desktop 'CalmDown.lnk'; " ^
