@@ -261,7 +261,14 @@ namespace CalmDown
                 if (ret == 0)
                 {
                     string overlayName = GetOverlayFriendlyName(overlayGuid);
-                    Console.WriteLine(string.Format("  Overlay Scheme     : {0} ({1})", overlayGuid, overlayName));
+                    if (overlayName.StartsWith("Unknown overlay", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.WriteLine(string.Format("  Overlay Scheme     : {0}", overlayName));
+                    }
+                    else
+                    {
+                        Console.WriteLine(string.Format("  Overlay Scheme     : {0} ({1})", overlayGuid, overlayName));
+                    }
                 }
                 else
                 {
@@ -274,14 +281,13 @@ namespace CalmDown
             }
         }
 
-        private static string GetOverlayFriendlyName(Guid g)
+        public static string GetOverlayFriendlyName(Guid g)
         {
             string s = g.ToString().ToLowerInvariant();
-            if (s == "00000000-0000-0000-0000-000000000000") return "None / Default";
-            if (s == "961cc777-2547-4f93-819f-090c433b4b80") return "Best Power Efficiency";
-            if (s == "3af9b8d9-7c97-431d-ad7e-343427116b39") return "Balanced (Recommended)";
+            if (s == "961cc777-2547-4f9d-8174-7d86181b8a7a") return "Best Power Efficiency";
+            if (s == "00000000-0000-0000-0000-000000000000") return "Balanced";
             if (s == "ded574b5-45a0-4f42-8737-46345c09c238") return "Best Performance";
-            return "Custom Overlay";
+            return "Unknown overlay (" + s + ")";
         }
 
         private static void PrintOemTools()
@@ -504,6 +510,13 @@ namespace CalmDown
                 TickWorkload(smC, 45.0, 45.0 / 16.0);
             }
             Assert("Clock Model (c): Sustained 45 GHz*threads settles in Sweet-Spot (not stuck in Beast)", smC.CurrentMode == GovernorMode.SweetSpot);
+
+            // 13. Overlay Name Mapping Tests
+            Assert("Overlay name mapping: Best Power Efficiency", Diagnostic.GetOverlayFriendlyName(new Guid("961cc777-2547-4f9d-8174-7d86181b8a7a")) == "Best Power Efficiency");
+            Assert("Overlay name mapping: Balanced", Diagnostic.GetOverlayFriendlyName(new Guid("00000000-0000-0000-0000-000000000000")) == "Balanced");
+            Assert("Overlay name mapping: Best Performance", Diagnostic.GetOverlayFriendlyName(new Guid("ded574b5-45a0-4f42-8737-46345c09c238")) == "Best Performance");
+            Assert("Overlay name mapping: Case-insensitive upper-case GUID", Diagnostic.GetOverlayFriendlyName(new Guid("961CC777-2547-4F9D-8174-7D86181B8A7A")) == "Best Power Efficiency");
+            Assert("Overlay name mapping: Unknown overlay GUID", Diagnostic.GetOverlayFriendlyName(new Guid("11111111-2222-3333-4444-555555555555")) == "Unknown overlay (11111111-2222-3333-4444-555555555555)");
 
             Console.WriteLine("---------------------------------------------------------");
             Console.WriteLine("   [RESULT] All Governor State Machine Asserts Passed!  ");
