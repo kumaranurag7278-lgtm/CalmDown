@@ -149,7 +149,7 @@ To verify the integrity of the standalone binary:
 
 - **File:** `CalmDown.exe`
 - **SHA-256 Checksum:**  
-  `9B8512E12846A9B2054EA5E1922C2C1EA8AB425673695B30EB14EBAEC4E9A408`
+  `9CD819CAE9D929CAED35D5EF700F136FF293AC3CE0CD47B3792381A7F58EED91`
 
 You can verify the checksum in PowerShell:
 ```powershell
