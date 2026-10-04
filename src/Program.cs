@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -11,7 +12,7 @@ using Microsoft.Win32;
 
 namespace CalmDown
 {
-    internal enum PerfBoostMode
+    internal enum PerfBoostMode : uint
     {
         Disabled = 0,
         Enabled = 1,
@@ -47,7 +48,7 @@ namespace CalmDown
                 try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CalmDown", "crash.log"), e.Exception.ToString()); } catch { }
             };
 
-            // Handle CLI flags if passed
+            // CLI flags handling
             if (args != null && args.Length > 0)
             {
                 string flag = args[0].Trim().ToLowerInvariant();
@@ -55,28 +56,28 @@ namespace CalmDown
                 {
                     case "--ice":
                     case "-i":
-                        PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled);
+                        NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled, true, false);
                         return;
                     case "--sweet":
                     case "-s":
-                        PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
+                        NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive, true, false);
                         return;
                     case "--beast":
                     case "-b":
-                        PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive);
+                        NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive, true, false);
                         return;
                     case "--restore":
                     case "-r":
-                        PowerHelper.RestoreOriginal();
+                        NativePower.RestoreOriginalDirect();
                         return;
                 }
             }
 
-            // Enforce single instance: if already running, restore existing window and exit
+            // Single instance enforcement with AbandonedMutex recovery
             bool isFirstInstance = false;
             try
             {
-                singleInstanceMutex = new Mutex(false, @"Local\CalmDown_SingleInstance_Mutex_v2");
+                singleInstanceMutex = new Mutex(false, @"Local\CalmDown_SingleInstance_Mutex_v3");
                 isFirstInstance = singleInstanceMutex.WaitOne(0, false);
             }
             catch (AbandonedMutexException)
@@ -116,7 +117,6 @@ namespace CalmDown
 
         static ConfigManager()
         {
-            // Default settings
             DynamicGovernor = false;
             GameAutoPilot = true;
             if (File.Exists(ConfigFile))
@@ -164,67 +164,266 @@ namespace CalmDown
             try
             {
                 if (!Directory.Exists(ConfigDir)) Directory.CreateDirectory(ConfigDir);
+                string tempFile = ConfigFile + ".tmp";
                 string content = string.Format(
-                    "# CalmDown Hardware Configuration\r\nDynamicGovernor={0}\r\nGameAutoPilot={1}\r\n",
+                    "# CalmDown v3.0 Hardware Configuration\r\nDynamicGovernor={0}\r\nGameAutoPilot={1}\r\n",
                     DynamicGovernor, GameAutoPilot);
-                File.WriteAllText(ConfigFile, content);
+                File.WriteAllText(tempFile, content);
+                if (File.Exists(ConfigFile)) File.Delete(ConfigFile);
+                File.Move(tempFile, ConfigFile);
             }
             catch { }
         }
     }
 
-    internal static class CpuMonitor
+    internal static class NativePower
     {
+        public const uint FREQ_UNCAPPED = 0;
+        public const uint FREQ_SWEETSPOT_MHZ = 3500;
+
+        // ACPI Guids from Windows PowrProf
+        private static Guid SubGroupProcessor = new Guid("54533251-82be-4824-96c1-47b60b740d00");
+        private static Guid GuidBoostMode = new Guid("be337238-0d82-4146-a960-4f3749d470c7");
+        private static Guid GuidFreqMax = new Guid("75b0ae3f-bce0-45a7-8c89-c9611c25e100");
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerGetActiveScheme(IntPtr UserRootPowerKey, out IntPtr ActivePolicyGuid);
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerReadACValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, out uint AcValueIndex);
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerReadDCValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, out uint DcValueIndex);
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerWriteACValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, uint AcValueIndex);
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerWriteDCValueIndex(IntPtr RootPowerKey, ref Guid SchemeGuid, ref Guid SubGroup, ref Guid Setting, uint DcValueIndex);
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerSetActiveScheme(IntPtr UserRootPowerKey, ref Guid SchemeGuid);
+
         [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool GetSystemTimes(out System.Runtime.InteropServices.ComTypes.FILETIME idleTime,
-                                                  out System.Runtime.InteropServices.ComTypes.FILETIME kernelTime,
-                                                  out System.Runtime.InteropServices.ComTypes.FILETIME userTime);
+        private static extern IntPtr LocalFree(IntPtr hMem);
 
-        private static ulong prevIdle = 0;
-        private static ulong prevKernel = 0;
-        private static ulong prevUser = 0;
-        private static bool initialized = false;
+        private static readonly string BackupPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CalmDown", "original_settings.txt");
 
-        private static ulong ToUInt64(System.Runtime.InteropServices.ComTypes.FILETIME ft)
+        private static uint cachedFreq = 999999;
+        private static uint cachedBoost = 999999;
+
+        public static bool GetActiveSchemeGuid(out Guid activeScheme)
         {
-            return ((ulong)(uint)ft.dwHighDateTime << 32) | (uint)ft.dwLowDateTime;
+            activeScheme = Guid.Empty;
+            IntPtr pGuid;
+            if (PowerGetActiveScheme(IntPtr.Zero, out pGuid) == 0 && pGuid != IntPtr.Zero)
+            {
+                try
+                {
+                    activeScheme = (Guid)Marshal.PtrToStructure(pGuid, typeof(Guid));
+                    return true;
+                }
+                finally
+                {
+                    LocalFree(pGuid);
+                }
+            }
+            return false;
         }
 
-        public static int GetCurrentLoad()
+        public static bool ReadCurrentIndices(out uint boostMode, out uint maxFreqMhz)
         {
-            System.Runtime.InteropServices.ComTypes.FILETIME idle, kernel, user;
-            if (!GetSystemTimes(out idle, out kernel, out user)) return -1;
+            boostMode = 0;
+            maxFreqMhz = 0;
+            Guid scheme;
+            if (!GetActiveSchemeGuid(out scheme)) return false;
 
-            ulong curIdle = ToUInt64(idle);
-            ulong curKernel = ToUInt64(kernel);
-            ulong curUser = ToUInt64(user);
+            PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, out boostMode);
+            PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, out maxFreqMhz);
+            return true;
+        }
 
-            if (!initialized)
+        public static void EnsureBackup()
+        {
+            try
             {
-                prevIdle = curIdle;
-                prevKernel = curKernel;
-                prevUser = curUser;
-                initialized = true;
-                return 0;
+                if (File.Exists(BackupPath)) return;
+                string dir = Path.GetDirectoryName(BackupPath);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+                uint b, f;
+                if (ReadCurrentIndices(out b, out f))
+                {
+                    File.WriteAllText(BackupPath, string.Format("{0},{1}", b, f));
+                }
+            }
+            catch { }
+        }
+
+        public static bool RestoreOriginalDirect()
+        {
+            try
+            {
+                if (!File.Exists(BackupPath)) return false;
+                string[] parts = File.ReadAllText(BackupPath).Trim().Split(',');
+                if (parts.Length < 2) return false;
+
+                uint boost = uint.Parse(parts[0]);
+                uint freq = uint.Parse(parts[1]);
+                cachedFreq = 999999;
+                cachedBoost = 999999;
+                return ApplyModeDirect(freq, (PerfBoostMode)boost, true, true);
+            }
+            catch { return false; }
+        }
+
+        public static bool ApplyModeDirect(uint freqMhz, PerfBoostMode boostMode, bool writeAC = true, bool writeDC = false)
+        {
+            // Avoid duplicate execution if already applied
+            if (cachedFreq == freqMhz && cachedBoost == (uint)boostMode)
+            {
+                return true;
             }
 
-            ulong diffIdle = curIdle - prevIdle;
-            ulong diffKernel = curKernel - prevKernel;
-            ulong diffUser = curUser - prevUser;
+            EnsureBackup();
+            Guid scheme;
+            if (!GetActiveSchemeGuid(out scheme)) return false;
 
-            prevIdle = curIdle;
-            prevKernel = curKernel;
-            prevUser = curUser;
+            bool ok = true;
+            if (writeAC)
+            {
+                if (PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, freqMhz) != 0 ||
+                    PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, (uint)boostMode) != 0)
+                {
+                    ok = false;
+                }
+            }
 
-            ulong sysTotal = diffKernel + diffUser;
-            if (sysTotal == 0) return 0;
+            if (writeDC)
+            {
+                if (PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, freqMhz) != 0 ||
+                    PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, (uint)boostMode) != 0)
+                {
+                    ok = false;
+                }
+            }
 
-            if (diffIdle > sysTotal) diffIdle = sysTotal;
-            ulong busy = sysTotal - diffIdle;
-            int pct = (int)((busy * 100) / sysTotal);
-            if (pct < 0) pct = 0;
-            if (pct > 100) pct = 100;
-            return pct;
+            if (ok)
+            {
+                PowerSetActiveScheme(IntPtr.Zero, ref scheme);
+                cachedFreq = freqMhz;
+                cachedBoost = (uint)boostMode;
+            }
+            return ok;
+        }
+    }
+
+    internal static class HardwareMonitor
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        struct SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION
+        {
+            public long IdleTime;
+            public long KernelTime;
+            public long UserTime;
+            public long DpcTime;
+            public long InterruptTime;
+            public int InterruptCount;
+        }
+
+        [DllImport("ntdll.dll")]
+        private static extern int NtQuerySystemInformation(int SystemInformationClass, IntPtr SystemInformation, int SystemInformationLength, out int ReturnLength);
+
+        [DllImport("shell32.dll")]
+        private static extern int SHQueryUserNotificationState(out int pquns);
+
+        private static int coreCount = Environment.ProcessorCount;
+        private static int structSize = Marshal.SizeOf(typeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION));
+        private static int totalSize = structSize * coreCount;
+        private static IntPtr prevBuf = IntPtr.Zero;
+        private static bool initialized = false;
+
+        public static int CoreCount { get { return coreCount; } }
+
+        public static void GetCpuMetrics(out int avgLoad, out int maxCoreLoad)
+        {
+            avgLoad = 0;
+            maxCoreLoad = 0;
+
+            IntPtr curBuf = Marshal.AllocHGlobal(totalSize);
+            int retLen;
+            if (NtQuerySystemInformation(8, curBuf, totalSize, out retLen) != 0)
+            {
+                Marshal.FreeHGlobal(curBuf);
+                return;
+            }
+
+            if (!initialized || prevBuf == IntPtr.Zero)
+            {
+                prevBuf = curBuf;
+                initialized = true;
+                return;
+            }
+
+            long totalSysAll = 0;
+            long totalBusyAll = 0;
+            long highestCoreBusy = 0;
+            long highestCoreTotal = 1;
+
+            for (int i = 0; i < coreCount; i++)
+            {
+                IntPtr p1 = new IntPtr(prevBuf.ToInt64() + i * structSize);
+                IntPtr p2 = new IntPtr(curBuf.ToInt64() + i * structSize);
+                SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION i1 = (SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION)Marshal.PtrToStructure(p1, typeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION));
+                SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION i2 = (SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION)Marshal.PtrToStructure(p2, typeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION));
+
+                long idle = i2.IdleTime - i1.IdleTime;
+                long kernel = i2.KernelTime - i1.KernelTime;
+                long user = i2.UserTime - i1.UserTime;
+                long total = kernel + user;
+                long busy = total - idle;
+                if (busy < 0) busy = 0;
+
+                totalSysAll += total;
+                totalBusyAll += busy;
+
+                if (total > 0)
+                {
+                    if ((busy * 100) / total > (highestCoreBusy * 100) / highestCoreTotal)
+                    {
+                        highestCoreBusy = busy;
+                        highestCoreTotal = total;
+                    }
+                }
+            }
+
+            Marshal.FreeHGlobal(prevBuf);
+            prevBuf = curBuf;
+
+            if (totalSysAll > 0)
+            {
+                avgLoad = (int)((totalBusyAll * 100) / totalSysAll);
+            }
+            if (highestCoreTotal > 0)
+            {
+                maxCoreLoad = (int)((highestCoreBusy * 100) / highestCoreTotal);
+            }
+
+            avgLoad = Math.Max(0, Math.Min(100, avgLoad));
+            maxCoreLoad = Math.Max(0, Math.Min(100, maxCoreLoad));
+        }
+
+        public static bool IsD3DFullscreenGameActive()
+        {
+            int state;
+            if (SHQueryUserNotificationState(out state) == 0)
+            {
+                // QUNS_RUNNING_D3D_FULL_SCREEN = 3
+                return state == 3;
+            }
+            return false;
         }
 
         public static string GetProcessorName()
@@ -243,134 +442,13 @@ namespace CalmDown
         }
     }
 
-    internal static class PowerHelper
-    {
-        public const int FREQ_UNCAPPED = 0;
-        public const int FREQ_SWEETSPOT_MHZ = 3500;
-        private static readonly string BackupPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CalmDown", "original_settings.txt");
-
-        private static int currentAppliedFreq = -999;
-        private static int currentAppliedBoost = -999;
-
-        public static bool RunPowercfg(string args, out string output)
-        {
-            output = "";
-            try
-            {
-                var psi = new ProcessStartInfo("powercfg", args)
-                {
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using (var p = Process.Start(psi))
-                {
-                    output = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit();
-                    return p.ExitCode == 0;
-                }
-            }
-            catch (Exception ex)
-            {
-                output = ex.Message;
-                return false;
-            }
-        }
-
-        public static int ParseCurrentIndex(string powercfgOutput)
-        {
-            foreach (string rawLine in powercfgOutput.Split('\n'))
-            {
-                string line = rawLine.Trim();
-                if (line.StartsWith("Current AC Power Setting Index:", StringComparison.OrdinalIgnoreCase))
-                {
-                    string[] parts = line.Split(':');
-                    if (parts.Length > 1)
-                    {
-                        try { return Convert.ToInt32(parts[1].Trim(), 16); }
-                        catch { return -1; }
-                    }
-                }
-            }
-            return -1;
-        }
-
-        public static void EnsureBackup()
-        {
-            try
-            {
-                if (File.Exists(BackupPath)) return;
-                string dir = Path.GetDirectoryName(BackupPath);
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-
-                string boostOut, freqOut;
-                RunPowercfg("/qh SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE", out boostOut);
-                RunPowercfg("/qh SCHEME_CURRENT SUB_PROCESSOR PROCFREQMAX", out freqOut);
-
-                int b = ParseCurrentIndex(boostOut);
-                int f = ParseCurrentIndex(freqOut);
-                File.WriteAllText(BackupPath, string.Format("{0},{1}", b, f));
-            }
-            catch { }
-        }
-
-        public static bool RestoreOriginal()
-        {
-            try
-            {
-                if (!File.Exists(BackupPath)) return false;
-                string[] parts = File.ReadAllText(BackupPath).Trim().Split(',');
-                if (parts.Length < 2) return false;
-
-                int boost = int.Parse(parts[0]);
-                int freq = int.Parse(parts[1]);
-                if (boost < 0) boost = 2;
-                if (freq < 0) freq = 0;
-
-                currentAppliedFreq = -999;
-                currentAppliedBoost = -999;
-                return ApplyMode(freq, (PerfBoostMode)boost);
-            }
-            catch { return false; }
-        }
-
-        public static bool ApplyMode(int freqMhz, PerfBoostMode boostMode)
-        {
-            if (currentAppliedFreq == freqMhz && currentAppliedBoost == (int)boostMode)
-            {
-                return true;
-            }
-
-            EnsureBackup();
-            string dummy;
-            bool ok = true;
-            foreach (string kind in new[] { "/setacvalueindex", "/setdcvalueindex" })
-            {
-                if (!RunPowercfg(string.Format("{0} SCHEME_CURRENT SUB_PROCESSOR PROCFREQMAX {1}", kind, freqMhz), out dummy) ||
-                    !RunPowercfg(string.Format("{0} SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE {1}", kind, (int)boostMode), out dummy))
-                {
-                    ok = false;
-                }
-            }
-            if (ok)
-            {
-                RunPowercfg("/setactive SCHEME_CURRENT", out dummy);
-                currentAppliedFreq = freqMhz;
-                currentAppliedBoost = (int)boostMode;
-            }
-            return ok;
-        }
-    }
-
     public class MainForm : Form
     {
         private Panel pnlHardware;
         private Label lblCpuName;
         private Label lblAcpiTarget;
         private Label lblLiveTelemetry;
-        private ProgressBar prgCpuLoad;
+        private Panel pnlSparkline;
 
         private Panel cardIce;
         private Panel cardSweet;
@@ -397,22 +475,28 @@ namespace CalmDown
         private ToolStripMenuItem trayAutoPilotItem;
         private System.Windows.Forms.Timer backgroundTimer;
 
+        // Rolling 50-point telemetry sparkline history
+        private List<int> telemetryHistory = new List<int>();
+        private const int MaxHistoryPoints = 50;
+
+        // Auto-pilot watched games
         private static readonly string[] WatchedProcesses = new[]
         {
             "VALORANT", "VALORANT-Win64-Shipping", "cs2", "GTA5", "Overwatch", "FortniteClient-Win64-Shipping", "r5apex"
         };
         private bool isGameActive = false;
 
-        private int lowLoadCount = 0;
-        private int midLoadCount = 0;
-        private int heavyLoadCount = 0;
+        // Fast-attack, slow-release debounce timers
+        private int stepDownDwellTicks = 0;
 
         public MainForm()
         {
+            for (int i = 0; i < MaxHistoryPoints; i++) telemetryHistory.Add(0);
+
             InitializeComponent();
             SetupTray();
             SetupGovernorTimer();
-            RefreshStatus(0);
+            RefreshStatus(0, 0);
         }
 
         protected override void WndProc(ref Message m)
@@ -433,8 +517,8 @@ namespace CalmDown
 
         private void InitializeComponent()
         {
-            this.Text = "CalmDown - Hardware Power Governor";
-            this.Size = new Size(570, 620);
+            this.Text = "CalmDown v3.0 - Driver-Free Hardware Power Governor";
+            this.Size = new Size(580, 630);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -447,7 +531,7 @@ namespace CalmDown
             pnlHardware = new Panel
             {
                 Location = new Point(18, 14),
-                Size = new Size(518, 86),
+                Size = new Size(528, 92),
                 BackColor = Color.FromArgb(25, 27, 33)
             };
             pnlHardware.Paint += (s, e) => {
@@ -457,73 +541,72 @@ namespace CalmDown
 
             lblCpuName = new Label
             {
-                Text = "CPU: " + CpuMonitor.GetProcessorName(),
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                Text = string.Format("CPU: {0} ({1} Threads)", HardwareMonitor.GetProcessorName(), HardwareMonitor.CoreCount),
+                Font = new Font("Segoe UI", 9.2f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(245, 247, 252),
-                Location = new Point(14, 10),
+                Location = new Point(14, 8),
                 AutoSize = true
             };
 
             lblAcpiTarget = new Label
             {
-                Text = "ACPI Target: SCHEME_CURRENT -> SUB_PROCESSOR (PROCFREQMAX / PERFBOOSTMODE)",
+                Text = "Engine: Native powrprof.dll Win32 P/Invoke | Driver-Free | 0 BSOD Risk",
                 Font = new Font("Consolas", 7.8f, FontStyle.Regular),
-                ForeColor = Color.FromArgb(145, 152, 168),
-                Location = new Point(15, 33),
+                ForeColor = Color.FromArgb(0, 200, 83),
+                Location = new Point(15, 30),
                 AutoSize = true
             };
 
             lblLiveTelemetry = new Label
             {
                 Text = "STATUS: INITIALIZING...",
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(0, 200, 83),
-                Location = new Point(14, 56),
+                Font = new Font("Segoe UI", 8.8f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(0, 168, 255),
+                Location = new Point(14, 52),
                 AutoSize = true
             };
 
-            prgCpuLoad = new ProgressBar
+            // Live Rolling Telemetry Sparkline
+            pnlSparkline = new Panel
             {
-                Location = new Point(380, 57),
-                Size = new Size(120, 16),
-                Style = ProgressBarStyle.Continuous,
-                Minimum = 0,
-                Maximum = 100,
-                Value = 0
+                Location = new Point(370, 48),
+                Size = new Size(142, 34),
+                BackColor = Color.FromArgb(14, 15, 18)
             };
+            pnlSparkline.Paint += DrawSparkline;
 
             pnlHardware.Controls.Add(lblCpuName);
             pnlHardware.Controls.Add(lblAcpiTarget);
             pnlHardware.Controls.Add(lblLiveTelemetry);
-            pnlHardware.Controls.Add(prgCpuLoad);
+            pnlHardware.Controls.Add(pnlSparkline);
             this.Controls.Add(pnlHardware);
 
             // 2. Profile Selection Cards
             cardIce = CreateProfileCard(
                 "ICE-COLD PROFILE",
-                "Frequency Ceiling: Base Clock (~2.4 GHz)  |  Boost: Disabled (0x0)\nTarget Wattage: ~15W–25W  |  Keyboard Cool  |  Fans: Silent\nOptimal for: Background Study, Web Browsing, Document Work",
-                new Point(18, 112),
+                "Frequency Ceiling: Base Clock (~2.4 GHz) | Turbo: Disabled (0x0)\nTarget Wattage: ~15W–25W | Keyboard Cool | Silent Fans\nIdeal for: Study, Reading, Web Browsing, Document Work",
+                new Point(18, 116),
                 Color.FromArgb(0, 168, 255),
                 out lblIceTag,
-                () => SetManualMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled)
+                () => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled)
             );
 
             cardSweet = CreateProfileCard(
                 "SWEET-SPOT BALANCED PROFILE",
-                "Frequency Ceiling: 3500 MHz  |  Boost: Efficient Aggressive (0x4)\nTarget Wattage: ~30W–35W  |  Curb Voltage Runaway  |  Stable Frametimes\nOptimal for: Valorant, CS2, Competitive Gaming, Daily Multitasking",
-                new Point(18, 192),
+                "Frequency Ceiling: 3500 MHz | Turbo: Efficient Aggressive (0x4)\nTarget Wattage: ~30W–35W | Voltage Inflection Cap | Zero Stutters\nIdeal for: Valorant, CS2, Competitive Gaming, Multitasking",
+                new Point(18, 196),
                 Color.FromArgb(0, 200, 83),
                 out lblSweetTag,
-                () => SetManualMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive)
+                () => SetManualMode(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive)
             );
 
             cardBeast = CreateProfileCard(
                 "BEAST TURBO PROFILE",
-                "Frequency Ceiling: Uncapped (Up to 4.9 GHz)  |  Boost: Aggressive (0x2)\nTarget Wattage: Full TDP (~65W–75W+)  |  High Thermals\nOptimal for: Video Rendering, Code Compiling, Benchmarking",
-                new Point(18, 272),
+                "Frequency Ceiling: Uncapped (Up to 4.9 GHz) | Turbo: Aggressive (0x2)\nTarget Wattage: Full Package TDP (~65W–75W+) | High Thermals\nIdeal for: 4K Video Exports, Code Builds, Heavy Benchmarks",
+                new Point(18, 276),
                 Color.FromArgb(255, 82, 82),
                 out lblBeastTag,
-                () => SetManualMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive)
+                () => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive)
             );
 
             this.Controls.Add(cardIce);
@@ -533,8 +616,8 @@ namespace CalmDown
             // 3. Autonomous Automation Settings Panel
             pnlAutomation = new Panel
             {
-                Location = new Point(18, 362),
-                Size = new Size(518, 118),
+                Location = new Point(18, 366),
+                Size = new Size(528, 122),
                 BackColor = Color.FromArgb(25, 27, 33)
             };
             pnlAutomation.Paint += (s, e) => {
@@ -544,7 +627,7 @@ namespace CalmDown
 
             chkDynamic = new CheckBox
             {
-                Text = "Enable Smart Dynamic Load Governor",
+                Text = "Enable Smart Dynamic Load Governor (Max-Core Aware)",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(235, 238, 248),
                 Location = new Point(14, 12),
@@ -557,24 +640,26 @@ namespace CalmDown
                 ConfigManager.DynamicGovernor = chkDynamic.Checked;
                 ConfigManager.Save();
                 if (trayDynamicItem != null) trayDynamicItem.Checked = chkDynamic.Checked;
-                RefreshStatus(CpuMonitor.GetCurrentLoad());
+                int a, m;
+                HardwareMonitor.GetCpuMetrics(out a, out m);
+                RefreshStatus(a, m);
             };
 
             lblDynamicSub = new Label
             {
-                Text = "Dynamically adjusts frequency ceilings based on sustained CPU demand\n(<20% Load: Ice-Cold  |  25-80% Load: Sweet-Spot  |  >85% Load: Beast Turbo)",
+                Text = "Uses per-core tracking with fast-attack & slow-release to prevent single-core gaming choke.\n(<20% Max Core: Ice-Cold  |  25-80%: Sweet-Spot  |  >80%: Beast Turbo)",
                 Font = new Font("Segoe UI", 8f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(145, 152, 168),
                 Location = new Point(34, 32),
-                Size = new Size(470, 28)
+                Size = new Size(480, 28)
             };
 
             chkAutoPilot = new CheckBox
             {
-                Text = "Enable Game Auto-Pilot Priority",
+                Text = "Enable Game Auto-Pilot Priority (Direct3D Fullscreen + Process Lock)",
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(235, 238, 248),
-                Location = new Point(14, 66),
+                Location = new Point(14, 68),
                 AutoSize = true,
                 Checked = ConfigManager.GameAutoPilot,
                 Cursor = Cursors.Hand
@@ -588,11 +673,11 @@ namespace CalmDown
 
             lblAutoPilotSub = new Label
             {
-                Text = "Locks Sweet-Spot (3500 MHz) when games run to guarantee zero frametime drops.",
+                Text = "Auto-detects exclusive 3D games via SHQueryUserNotificationState & locks 3500 MHz.",
                 Font = new Font("Segoe UI", 8f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(145, 152, 168),
-                Location = new Point(34, 88),
-                Size = new Size(470, 18)
+                Location = new Point(34, 90),
+                Size = new Size(480, 18)
             };
 
             pnlAutomation.Controls.Add(chkDynamic);
@@ -605,7 +690,7 @@ namespace CalmDown
             btnRestore = new Button
             {
                 Text = "Restore Factory Defaults",
-                Location = new Point(18, 492),
+                Location = new Point(18, 502),
                 Size = new Size(185, 36),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
@@ -617,10 +702,12 @@ namespace CalmDown
             btnRestore.Click += (s, e) =>
             {
                 chkDynamic.Checked = false;
-                if (PowerHelper.RestoreOriginal())
+                if (NativePower.RestoreOriginalDirect())
                 {
                     MessageBox.Show("Stock ACPI power scheme indices successfully restored.", "CalmDown", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    RefreshStatus(CpuMonitor.GetCurrentLoad());
+                    int a, m;
+                    HardwareMonitor.GetCpuMetrics(out a, out m);
+                    RefreshStatus(a, m);
                 }
             };
             this.Controls.Add(btnRestore);
@@ -628,7 +715,7 @@ namespace CalmDown
             btnMinimizeTray = new Button
             {
                 Text = "Minimize to System Tray",
-                Location = new Point(350, 492),
+                Location = new Point(360, 502),
                 Size = new Size(185, 36),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
@@ -640,7 +727,7 @@ namespace CalmDown
             btnMinimizeTray.Click += (s, e) =>
             {
                 this.Hide();
-                trayIcon.ShowBalloonTip(1500, "CalmDown", "Running quietly in tray. Double-click tray icon to restore.", ToolTipIcon.Info);
+                trayIcon.ShowBalloonTip(1500, "CalmDown Active", "Running quietly in tray. Double-click tray icon to restore.", ToolTipIcon.Info);
             };
             this.Controls.Add(btnMinimizeTray);
 
@@ -652,7 +739,7 @@ namespace CalmDown
             };
             statusLabel = new ToolStripStatusLabel
             {
-                Text = "Ready  |  ACPI Status: OK  |  Single Instance: Active",
+                Text = "Ready | Engine: PowrProf P/Invoke | Anti-Cheat Safe (0 Kernel Drivers) | v3.0",
                 ForeColor = Color.FromArgb(120, 126, 140),
                 Font = new Font("Segoe UI", 8f, FontStyle.Regular)
             };
@@ -671,12 +758,40 @@ namespace CalmDown
             };
         }
 
+        private void DrawSparkline(object sender, PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            int w = pnlSparkline.Width;
+            int h = pnlSparkline.Height;
+
+            // Subtle border
+            ControlPaint.DrawBorder(g, pnlSparkline.ClientRectangle, Color.FromArgb(35, 38, 46), ButtonBorderStyle.Solid);
+
+            if (telemetryHistory.Count < 2) return;
+
+            PointF[] points = new PointF[telemetryHistory.Count];
+            float dx = (float)w / (telemetryHistory.Count - 1);
+
+            for (int i = 0; i < telemetryHistory.Count; i++)
+            {
+                float y = h - (telemetryHistory[i] * (h - 4) / 100f) - 2;
+                points[i] = new PointF(i * dx, y);
+            }
+
+            using (Pen pen = new Pen(Color.FromArgb(0, 168, 255), 1.5f))
+            {
+                g.DrawLines(pen, points);
+            }
+        }
+
         private Panel CreateProfileCard(string title, string specs, Point loc, Color accent, out Label outTag, Action onClick)
         {
             var pnl = new Panel
             {
                 Location = loc,
-                Size = new Size(518, 72),
+                Size = new Size(528, 72),
                 BackColor = Color.FromArgb(25, 27, 33),
                 Cursor = Cursors.Hand
             };
@@ -697,7 +812,7 @@ namespace CalmDown
                 Text = "",
                 Font = new Font("Segoe UI", 7.5f, FontStyle.Bold),
                 ForeColor = accent,
-                Location = new Point(410, 10),
+                Location = new Point(415, 10),
                 Size = new Size(95, 18),
                 TextAlign = ContentAlignment.MiddleRight,
                 BackColor = Color.Transparent
@@ -711,7 +826,7 @@ namespace CalmDown
                 Font = new Font("Segoe UI", 7.8f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(145, 152, 168),
                 Location = new Point(14, 28),
-                Size = new Size(490, 38),
+                Size = new Size(500, 38),
                 BackColor = Color.Transparent
             };
             lblD.Click += (s, e) => onClick();
@@ -737,11 +852,11 @@ namespace CalmDown
         private void SetupTray()
         {
             trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("CalmDown Hardware Governor", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
+            trayMenu.Items.Add("CalmDown Hardware Governor v3.0", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
             trayMenu.Items.Add("-");
-            trayMenu.Items.Add("Ice-Cold Profile (2.4 GHz)", null, (s, e) => SetManualMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled));
-            trayMenu.Items.Add("Sweet-Spot Profile (3.5 GHz)", null, (s, e) => SetManualMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive));
-            trayMenu.Items.Add("Beast Turbo Profile (Uncapped)", null, (s, e) => SetManualMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive));
+            trayMenu.Items.Add("Ice-Cold Profile (~2.4 GHz)", null, (s, e) => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled));
+            trayMenu.Items.Add("Sweet-Spot Profile (3500 MHz)", null, (s, e) => SetManualMode(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive));
+            trayMenu.Items.Add("Beast Turbo Profile (Uncapped)", null, (s, e) => SetManualMode(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive));
             trayMenu.Items.Add("-");
 
             trayDynamicItem = new ToolStripMenuItem("Smart Dynamic Governor", null, (s, e) =>
@@ -772,77 +887,84 @@ namespace CalmDown
 
         private void SetupGovernorTimer()
         {
-            backgroundTimer = new System.Windows.Forms.Timer { Interval = 2500 };
+            backgroundTimer = new System.Windows.Forms.Timer { Interval = 2000 };
             backgroundTimer.Tick += (s, e) =>
             {
                 try
                 {
-                    int currentLoad = CpuMonitor.GetCurrentLoad();
-                    if (currentLoad < 0) currentLoad = 0;
+                    int avgLoad, maxCoreLoad;
+                    HardwareMonitor.GetCpuMetrics(out avgLoad, out maxCoreLoad);
 
-                    // 1. Check for Active Games
+                    // Add to rolling sparkline history
+                    telemetryHistory.Add(maxCoreLoad);
+                    if (telemetryHistory.Count > MaxHistoryPoints) telemetryHistory.RemoveAt(0);
+                    pnlSparkline.Invalidate();
+
+                    // Centralized Priority Arbitration:
+                    // 1. Check for Active Games (Direct3D Fullscreen OR Process List)
                     bool gameRunning = false;
                     if (chkAutoPilot.Checked)
                     {
-                        foreach (string procName in WatchedProcesses)
+                        if (HardwareMonitor.IsD3DFullscreenGameActive())
                         {
-                            if (Process.GetProcessesByName(procName).Length > 0)
+                            gameRunning = true;
+                        }
+                        else
+                        {
+                            foreach (string procName in WatchedProcesses)
                             {
-                                gameRunning = true;
-                                break;
+                                if (Process.GetProcessesByName(procName).Length > 0)
+                                {
+                                    gameRunning = true;
+                                    break;
+                                }
                             }
                         }
 
                         if (gameRunning && !isGameActive)
                         {
                             isGameActive = true;
-                            PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
+                            NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
                             trayIcon.ShowBalloonTip(1800, "Game Detected", "Locked Sweet-Spot Profile (3500 MHz) for consistent frametimes.", ToolTipIcon.Info);
                         }
                         else if (!gameRunning && isGameActive)
                         {
                             isGameActive = false;
-                            PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled);
+                            NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled);
                             trayIcon.ShowBalloonTip(1800, "Game Exited", "Reverted to Ice-Cold Profile (~2.4 GHz).", ToolTipIcon.Info);
                         }
                     }
 
-                    // 2. Dynamic Governor (CPU load based)
+                    // 2. Dynamic Governor (Fast-attack, slow-release)
                     if (chkDynamic.Checked && !gameRunning)
                     {
-                        if (currentLoad >= 85)
+                        // Heavy Load: Immediate Fast-Attack
+                        if (maxCoreLoad >= 85 || avgLoad >= 75)
                         {
-                            heavyLoadCount++;
-                            midLoadCount = 0;
-                            lowLoadCount = 0;
-                            if (heavyLoadCount >= 2)
-                            {
-                                PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Aggressive);
-                            }
+                            stepDownDwellTicks = 3; // Hold for at least 6s
+                            NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Aggressive);
                         }
-                        else if (currentLoad >= 25 && currentLoad < 85)
+                        // Medium / Gaming Load: Immediate Step-Up
+                        else if (maxCoreLoad >= 25 || avgLoad >= 20)
                         {
-                            midLoadCount++;
-                            heavyLoadCount = 0;
-                            lowLoadCount = 0;
-                            if (midLoadCount >= 2)
-                            {
-                                PowerHelper.ApplyMode(PowerHelper.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
-                            }
+                            stepDownDwellTicks = 3;
+                            NativePower.ApplyModeDirect(NativePower.FREQ_SWEETSPOT_MHZ, PerfBoostMode.EfficientAggressive);
                         }
-                        else // < 20%
+                        // Low Load: Slow-Release Dwell Check
+                        else
                         {
-                            lowLoadCount++;
-                            heavyLoadCount = 0;
-                            midLoadCount = 0;
-                            if (lowLoadCount >= 2)
+                            if (stepDownDwellTicks > 0)
                             {
-                                PowerHelper.ApplyMode(PowerHelper.FREQ_UNCAPPED, PerfBoostMode.Disabled);
+                                stepDownDwellTicks--;
+                            }
+                            else
+                            {
+                                NativePower.ApplyModeDirect(NativePower.FREQ_UNCAPPED, PerfBoostMode.Disabled);
                             }
                         }
                     }
 
-                    RefreshStatus(currentLoad);
+                    RefreshStatus(avgLoad, maxCoreLoad);
                 }
                 catch (Exception ex)
                 {
@@ -852,37 +974,35 @@ namespace CalmDown
             backgroundTimer.Start();
         }
 
-        private void SetManualMode(int freq, PerfBoostMode boost)
+        private void SetManualMode(uint freq, PerfBoostMode boost)
         {
             if (chkDynamic.Checked)
             {
                 chkDynamic.Checked = false; // Disable dynamic governor so manual selection holds
             }
 
-            if (PowerHelper.ApplyMode(freq, boost))
+            if (NativePower.ApplyModeDirect(freq, boost))
             {
                 SystemSounds.Asterisk.Play();
-                RefreshStatus(CpuMonitor.GetCurrentLoad());
+                int a, m;
+                HardwareMonitor.GetCpuMetrics(out a, out m);
+                RefreshStatus(a, m);
             }
         }
 
-        private void RefreshStatus(int currentLoad)
+        private void RefreshStatus(int avgLoad, int maxCoreLoad)
         {
-            string boostOut, freqOut;
-            if (!PowerHelper.RunPowercfg("/qh SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE", out boostOut) ||
-                !PowerHelper.RunPowercfg("/qh SCHEME_CURRENT SUB_PROCESSOR PROCFREQMAX", out freqOut))
+            uint b, f;
+            if (!NativePower.ReadCurrentIndices(out b, out f))
             {
                 lblLiveTelemetry.Text = "ACPI READ ERROR";
                 lblLiveTelemetry.ForeColor = Color.Red;
                 return;
             }
 
-            int b = PowerHelper.ParseCurrentIndex(boostOut);
-            int f = PowerHelper.ParseCurrentIndex(freqOut);
-
-            bool isIce = (b == (int)PerfBoostMode.Disabled);
-            bool isSweet = (f == PowerHelper.FREQ_SWEETSPOT_MHZ);
-            bool isBeast = (b == (int)PerfBoostMode.Aggressive && f == PowerHelper.FREQ_UNCAPPED);
+            bool isIce = (b == (uint)PerfBoostMode.Disabled);
+            bool isSweet = (f == NativePower.FREQ_SWEETSPOT_MHZ);
+            bool isBeast = (b == (uint)PerfBoostMode.Aggressive && f == NativePower.FREQ_UNCAPPED);
 
             lblIceTag.Text = isIce ? "[ ACTIVE ]" : "";
             lblSweetTag.Text = isSweet ? "[ ACTIVE ]" : "";
@@ -899,17 +1019,12 @@ namespace CalmDown
             if (chkDynamic.Checked) modeTag = " [DYNAMIC]";
             else if (isGameActive) modeTag = " [GAME LOCK]";
 
-            lblLiveTelemetry.Text = string.Format("ACTIVE: {0}{1}  |  CPU LOAD: {2}%", modeTitle.ToUpperInvariant(), modeTag, currentLoad);
+            lblLiveTelemetry.Text = string.Format("ACTIVE: {0}{1} | AVG: {2}% | MAX CORE: {3}%", modeTitle.ToUpperInvariant(), modeTag, avgLoad, maxCoreLoad);
             lblLiveTelemetry.ForeColor = modeColor;
-
-            if (prgCpuLoad != null)
-            {
-                prgCpuLoad.Value = Math.Max(0, Math.Min(100, currentLoad));
-            }
 
             try
             {
-                string trayStr = string.Format("CalmDown: {0}% ({1})", currentLoad, modeTitle);
+                string trayStr = string.Format("CalmDown: {0}% ({1})", maxCoreLoad, modeTitle);
                 if (trayStr.Length > 63) trayStr = trayStr.Substring(0, 60) + "...";
                 trayIcon.Text = trayStr;
             }
