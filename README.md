@@ -18,13 +18,13 @@
 - 🔌 **Dual-Rail AC & DC Synchronization:** Writes both AC (plugged in) and DC (battery) ACPI indices, ensuring power limits remain active whether running on wall power or battery. Reads live indices directly without stale caching.
 - 🎯 **Full-Spectrum Deadband Hysteresis (Anti-Flap State Machine):**
   - **Low-Side Hysteresis:** Separated step-up ($\ge 30\%$ max core or $\ge 22\%$ avg for 2 ticks) and step-down ($< 15\%$ max and $< 12\%$ avg) absorbs clock scaling between 2.4 GHz and 3.5 GHz.
-  - **High-Side Hysteresis:** Escalation to Beast Turbo requires sustained multi-core compute (avg $\ge 70\%$ & max $\ge 85\%$ for 2 ticks). In Beast Turbo (4.9 GHz), workload is retained while avg $\ge 50\%$ or max $\ge 65\%$, eliminating upper ping-ponging during heavy exports/compiles.
+  - **High-Side Hysteresis:** Escalation to Beast Turbo requires sustained multi-core compute (avg $\ge 70\%$ & max $\ge 85\%$ for 2 ticks). In Beast Turbo (4.9 GHz), workload is retained while sustained multi-core demand persists (avg $\ge 50\%$ and max $\ge 60\%$), eliminating upper ping-ponging while allowing single hot threads to downstep cleanly.
 - 🎮 **Per-Process Rules & Multi-App Tracking:**
   - Reads `%LOCALAPPDATA%\CalmDown\rules.ini` and dynamically switches profiles when moving between ruled applications (e.g. Blender $\to$ VALORANT).
   - Automatically strips `.exe` suffixes and matches shipping executables (`VALORANT-Win64-Shipping`).
   - **4-Second Alt-Tab Grace Period:** Prevents profile thrashing and notification spam during brief focus changes.
   - **Exact Pre-Rule Snapshot:** Captures exact live hardware ACPI indices upon rule entry and cleanly restores them on exit.
-- 🧪 **Comprehensive Governor Verification (`--selftest`):** Full CLI test suite (`CalmDown.exe --selftest`) asserting all 17 state machine transitions, including clock-dependent low-side and high-side workload scaling.
+- 🧪 **Comprehensive Governor Verification (`--selftest`):** Full CLI test suite (`CalmDown.exe --selftest`) asserting all 20 state machine transitions, including clock-dependent low-side and high-side workload scaling.
 - ⏱️ **Non-Destructive Latency Benchmark (`--bench`):** Measures native Win32 `powrprof` apply latency with `Stopwatch` across 5 sequential transitions, backing up settings first and guaranteeing full restore upon completion.
 - 📈 **Live GDI Hardware Sparkline:** Smooth rolling 50-point telemetry graph directly in the UI, visualizing real-time CPU load spikes.
 - 🛡️ **Driver-Free User-Space Design:** Operates entirely within standard user-space via documented Windows ACPI power APIs, avoiding third-party ring-0 kernel drivers.
@@ -138,7 +138,7 @@ When reporting compatibility questions or opening an issue on GitHub, please run
 ---------------------------------------------------------
   Min: 40.87 ms | Avg: 55.99 ms | Max: 63.52 ms
 =========================================================
-  [RESTORE] Successfully restored pre-benchmark ACPI power profile.
+  [RESTORE] Successfully restored pre-benchmark ACPI power profile (both AC & DC rails).
 ```
 
 ---
