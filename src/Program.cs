@@ -144,6 +144,9 @@ namespace CalmDown
             Console.WriteLine("=========================================================");
             Console.WriteLine("   CalmDown Win32 PowrProf Apply Latency Benchmark");
             Console.WriteLine("=========================================================");
+            Console.WriteLine("  WARNING: This benchmark temporarily modifies ACPI power settings to measure apply latency.");
+            Console.WriteLine("           All original power settings will be restored automatically upon completion.");
+            Console.WriteLine();
 
             Guid scheme;
             if (!NativePower.GetActiveSchemeGuid(out scheme))
@@ -155,10 +158,9 @@ namespace CalmDown
             // Ensure stock settings are backed up before running benchmark writes
             NativePower.EnsureBackup();
 
-            // Capture pre-benchmark state to cleanly restore when benchmark completes
-            uint originalBoost = 0;
-            uint originalFreq = 0;
-            bool capturedOriginal = NativePower.ReadCurrentIndices(out originalBoost, out originalFreq);
+            // Capture pre-benchmark state for BOTH AC and DC rails separately
+            uint origAcBoost, origAcFreq, origDcBoost, origDcFreq;
+            bool capturedOriginal = NativePower.ReadAllIndices(out origAcBoost, out origAcFreq, out origDcBoost, out origDcFreq);
 
             try
             {
@@ -197,8 +199,8 @@ namespace CalmDown
             {
                 if (capturedOriginal)
                 {
-                    NativePower.ApplyModeDirect(originalFreq, (PerfBoostMode)originalBoost, true, true, forceWrite: true);
-                    Console.WriteLine("  [RESTORE] Successfully restored pre-benchmark ACPI power profile.");
+                    NativePower.ApplyRawRailIndices(origAcFreq, origAcBoost, origDcFreq, origDcBoost);
+                    Console.WriteLine("  [RESTORE] Successfully restored pre-benchmark ACPI power profile (both AC & DC rails).");
                 }
                 Console.WriteLine();
             }
@@ -631,9 +633,9 @@ namespace CalmDown
 
         private static readonly object powerSyncLock = new object();
 
-        private static Guid SubGroupProcessor = new Guid("54533251-82be-4824-96c1-47b60b740d00");
-        private static Guid GuidBoostMode = new Guid("be337238-0d82-4146-a960-4f3749d470c7");
-        private static Guid GuidFreqMax = new Guid("75b0ae3f-bce0-45a7-8c89-c9611c25e100");
+        public static Guid SubGroupProcessor = new Guid("54533251-82be-4824-96c1-47b60b740d00");
+        public static Guid GuidBoostMode = new Guid("be337238-0d82-4146-a960-4f3749d470c7");
+        public static Guid GuidFreqMax = new Guid("75b0ae3f-bce0-45a7-8c89-c9611c25e100");
 
         [DllImport("powrprof.dll")]
         private static extern uint PowerGetActiveScheme(IntPtr UserRootPowerKey, out IntPtr ActivePolicyGuid);
@@ -652,6 +654,15 @@ namespace CalmDown
 
         [DllImport("powrprof.dll")]
         private static extern uint PowerSetActiveScheme(IntPtr UserRootPowerKey, ref Guid SchemeGuid);
+
+        [DllImport("powrprof.dll", EntryPoint = "PowerReadFriendlyName", CharSet = CharSet.Unicode)]
+        private static extern uint PowerReadFriendlyName(
+            IntPtr RootPowerKey,
+            ref Guid SchemeGuid,
+            IntPtr SubGroupOfPowerSettingsGuid,
+            IntPtr PowerSettingGuid,
+            IntPtr Buffer,
+            ref uint BufferSize);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr LocalFree(IntPtr hMem);
@@ -677,6 +688,107 @@ namespace CalmDown
                 }
             }
             return false;
+        }
+
+        public static bool GetActiveSchemeFriendlyName(out string friendlyName, out uint errorCode)
+        {
+            friendlyName = "";
+            errorCode = 0;
+            Guid scheme;
+            if (!GetActiveSchemeGuid(out scheme))
+            {
+                errorCode = 1;
+                return false;
+            }
+
+            uint bufSize = 0;
+            uint ret = PowerReadFriendlyName(IntPtr.Zero, ref scheme, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, ref bufSize);
+            if (ret != 0 && ret != 234) // 234 = ERROR_MORE_DATA
+            {
+                errorCode = ret;
+                return false;
+            }
+
+            if (bufSize == 0)
+            {
+                friendlyName = "Unknown";
+                return true;
+            }
+
+            IntPtr pBuf = Marshal.AllocHGlobal((int)bufSize);
+            try
+            {
+                ret = PowerReadFriendlyName(IntPtr.Zero, ref scheme, IntPtr.Zero, IntPtr.Zero, pBuf, ref bufSize);
+                if (ret == 0)
+                {
+                    friendlyName = Marshal.PtrToStringUni(pBuf);
+                    return true;
+                }
+                else
+                {
+                    errorCode = ret;
+                    return false;
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pBuf);
+            }
+        }
+
+        public static uint ReadSpecificIndex(Guid scheme, bool isAC, Guid settingGuid, out uint value)
+        {
+            if (isAC)
+            {
+                return PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref settingGuid, out value);
+            }
+            else
+            {
+                return PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref settingGuid, out value);
+            }
+        }
+
+        public static bool ReadAllIndices(out uint acBoost, out uint acFreq, out uint dcBoost, out uint dcFreq)
+        {
+            acBoost = 0; acFreq = 0; dcBoost = 0; dcFreq = 0;
+            Guid scheme;
+            if (!GetActiveSchemeGuid(out scheme)) return false;
+
+            uint e1 = PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, out acBoost);
+            uint e2 = PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, out acFreq);
+            uint e3 = PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, out dcBoost);
+            uint e4 = PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, out dcFreq);
+
+            return (e1 == 0 && e2 == 0 && e3 == 0 && e4 == 0);
+        }
+
+        public static bool ApplyRawRailIndices(uint acFreq, uint acBoost, uint dcFreq, uint dcBoost)
+        {
+            lock (powerSyncLock)
+            {
+                Guid scheme;
+                if (!GetActiveSchemeGuid(out scheme)) return false;
+
+                bool atLeastOneWrite = false;
+                if (PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, acFreq) == 0 &&
+                    PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, acBoost) == 0)
+                {
+                    atLeastOneWrite = true;
+                }
+
+                if (PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidFreqMax, dcFreq) == 0 &&
+                    PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref SubGroupProcessor, ref GuidBoostMode, dcBoost) == 0)
+                {
+                    atLeastOneWrite = true;
+                }
+
+                if (atLeastOneWrite)
+                {
+                    PowerSetActiveScheme(IntPtr.Zero, ref scheme);
+                    return true;
+                }
+                return false;
+            }
         }
 
         public static bool ReadCurrentIndices(out uint boostMode, out uint maxFreqMhz)
@@ -979,8 +1091,10 @@ namespace CalmDown
         private string currentActiveRuleMode = null;
         private int ruleReleaseGraceTicks = 0;
         private const int RULE_RELEASE_GRACE_MAX = 2; // 2 ticks * 2000ms = 4 seconds alt-tab grace period
-        private uint preRuleBoost = 0;
-        private uint preRuleFreq = 0;
+        private uint preRuleAcBoost = 0;
+        private uint preRuleAcFreq = 0;
+        private uint preRuleDcBoost = 0;
+        private uint preRuleDcFreq = 0;
         private bool hasPreRuleSnapshot = false;
 
         public MainForm()
@@ -1432,12 +1546,9 @@ namespace CalmDown
                             currentActiveRuleApp = fgProcess;
                             currentActiveRuleMode = targetRule;
 
-                            // Take exact live snapshot of current ACPI indices to restore cleanly on exit
-                            uint b, f;
-                            if (NativePower.ReadCurrentIndices(out b, out f))
+                            // Take exact live snapshot of current ACPI indices for BOTH AC and DC rails
+                            if (NativePower.ReadAllIndices(out preRuleAcBoost, out preRuleAcFreq, out preRuleDcBoost, out preRuleDcFreq))
                             {
-                                preRuleBoost = b;
-                                preRuleFreq = f;
                                 hasPreRuleSnapshot = true;
                             }
                             previousUserMode = currentActiveGovernorMode;
@@ -1537,7 +1648,7 @@ namespace CalmDown
         {
             if (hasPreRuleSnapshot)
             {
-                NativePower.ApplyModeDirect(preRuleFreq, (PerfBoostMode)preRuleBoost);
+                NativePower.ApplyRawRailIndices(preRuleAcFreq, preRuleAcBoost, preRuleDcFreq, preRuleDcBoost);
                 hasPreRuleSnapshot = false;
                 currentActiveGovernorMode = previousUserMode;
             }
