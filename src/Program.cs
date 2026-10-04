@@ -532,6 +532,17 @@ namespace CalmDown
             catch { }
         }
 
+        private static readonly string[] DefaultGameRules = new string[]
+        {
+            "VALORANT = Sweet",
+            "VALORANT-Win64-Shipping = Sweet",
+            "cs2 = Sweet",
+            "GTA5 = Sweet",
+            "r5apex = Sweet",
+            "Overwatch = Sweet",
+            "FortniteClient-Win64-Shipping = Sweet"
+        };
+
         public static void LoadRules()
         {
             try
@@ -540,17 +551,56 @@ namespace CalmDown
                 if (!File.Exists(RulesFile))
                 {
                     string defaultRules = "# CalmDown Per-Process Rules (executable_name = Sweet / Beast / Ice)\r\n" +
+                                          "# Beast rules force full boost whenever the app is in the foreground,\r\n" +
+                                          "# even when idle. Add them only if you accept higher heat.\r\n" +
                                           "VALORANT = Sweet\r\n" +
                                           "VALORANT-Win64-Shipping = Sweet\r\n" +
                                           "cs2 = Sweet\r\n" +
                                           "GTA5 = Sweet\r\n" +
                                           "r5apex = Sweet\r\n" +
                                           "Overwatch = Sweet\r\n" +
-                                          "FortniteClient-Win64-Shipping = Sweet\r\n" +
-                                          "devenv = Beast\r\n" +
-                                          "Premiere = Beast\r\n" +
-                                          "Blender = Beast\r\n";
+                                          "FortniteClient-Win64-Shipping = Sweet\r\n";
                     File.WriteAllText(RulesFile, defaultRules);
+                }
+                else
+                {
+                    // Migration: preserve existing user rules, only append missing default game keys
+                    try
+                    {
+                        string[] existingLines = File.ReadAllLines(RulesFile);
+                        var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (string rawLine in existingLines)
+                        {
+                            string l = rawLine.Trim();
+                            if (string.IsNullOrEmpty(l) || l.StartsWith("#") || l.StartsWith(";")) continue;
+                            string[] p = l.Split('=');
+                            if (p.Length >= 1)
+                            {
+                                string k = p[0].Trim();
+                                if (k.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                                    k = k.Substring(0, k.Length - 4).Trim();
+                                existingKeys.Add(k);
+                            }
+                        }
+
+                        var toAppend = new List<string>();
+                        foreach (string def in DefaultGameRules)
+                        {
+                            string[] dp = def.Split('=');
+                            string dk = dp[0].Trim();
+                            if (!existingKeys.Contains(dk))
+                            {
+                                toAppend.Add(def);
+                                existingKeys.Add(dk);
+                            }
+                        }
+
+                        if (toAppend.Count > 0)
+                        {
+                            File.AppendAllLines(RulesFile, toAppend.ToArray());
+                        }
+                    }
+                    catch { }
                 }
 
                 AppRules.Clear();
