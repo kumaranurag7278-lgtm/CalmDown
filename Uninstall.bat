@@ -9,13 +9,14 @@ echo.
 
 set "TARGET_DIR=%LOCALAPPDATA%\CalmDown"
 
-echo [1/3] Restoring original factory power settings...
+echo [1/3] Terminating running CalmDown process...
+taskkill /F /IM CalmDown.exe >nul 2>&1
+timeout /t 1 /nobreak >nul 2>&1
+
+echo [2/3] Restoring original factory power settings...
 if exist "%TARGET_DIR%\CalmDown.exe" (
     "%TARGET_DIR%\CalmDown.exe" --restore
 )
-
-echo [2/3] Terminating running CalmDown process...
-taskkill /F /IM CalmDown.exe >nul 2>&1
 
 echo [3/3] Removing application files and Desktop shortcut...
 if exist "%TARGET_DIR%" rmdir /S /Q "%TARGET_DIR%"
